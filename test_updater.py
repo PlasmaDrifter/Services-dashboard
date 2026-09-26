@@ -123,6 +123,61 @@ class TestUpdaterEndpoints(unittest.TestCase):
             self.assertEqual(stats["docker_containers"], 1)
             self.assertEqual(stats["running_containers"], 2)
 
+    def test_version_comparison(self):
+        from app import is_newer_version
+        self.assertTrue(is_newer_version("v1.1.5", "v1.1.4"))
+        self.assertTrue(is_newer_version("1.2.0", "1.1.9"))
+        self.assertFalse(is_newer_version("v1.1.5", "v1.1.5"))
+        self.assertFalse(is_newer_version("v1.1.4", "v1.1.5"))
+        self.assertFalse(is_newer_version("1.0.0", "1.1.0"))
+
+    def test_stale_cache_evaluated_against_current_version(self):
+        import time
+        from unittest.mock import patch
+        import app
+
+        # Simulate metadata.json containing stale cache from prior to update:
+        # has_update was recorded as True for v1.1.5, but the app is now at v1.1.5
+        stale_meta = {
+            "last_checked": time.time() - 300,
+            "latest_version": app.APP_VERSION,
+            "release_url": "https://github.com/PlasmaDrifter/podman-systemd-dashboard/releases/tag/" + app.APP_VERSION,
+            "has_update": True,
+        }
+
+        with patch("scanner.get_cached_update", return_value=stale_meta):
+            with app.UPDATE_CACHE["lock"]:
+                app.UPDATE_CACHE["last_checked"] = 0
+                app.UPDATE_CACHE["latest_version"] = app.APP_VERSION
+                app.UPDATE_CACHE["has_update"] = True
+
+            result = app.check_github_update(force=False, enabled=True)
+            self.assertFalse(
+                result["has_update"],
+                "has_update must be False when latest_version matches current_version, even if cached as True"
+            )
+
+    def test_apply_update_clears_update_cache(self):
+        from unittest.mock import patch
+        import app
+
+        with patch("subprocess.run") as mock_run, \
+             patch("scanner.set_cached_update") as mock_set_cache, \
+             patch("os.path.isdir", return_value=True):
+            mock_proc = unittest.mock.MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = ""
+            mock_proc.stderr = ""
+            mock_run.return_value = mock_proc
+
+            app.UPDATE_CACHE["has_update"] = True
+            app.apply_self_update(target_tag=app.APP_VERSION)
+
+            self.assertFalse(app.UPDATE_CACHE["has_update"])
+            mock_set_cache.assert_called_once()
+            saved = mock_set_cache.call_args[0][0]
+            self.assertFalse(saved["has_update"])
+
 if __name__ == "__main__":
     unittest.main()
 

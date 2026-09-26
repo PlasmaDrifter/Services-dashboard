@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.1.5"
+APP_VERSION = "v1.1.6"
 GITHUB_REPO = "PlasmaDrifter/podman-systemd-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,14 +75,19 @@ def check_github_update(force=False, enabled=True):
             persisted = scanner.get_cached_update()
             if persisted and "last_checked" in persisted:
                 UPDATE_CACHE["last_checked"] = persisted.get("last_checked", 0)
-                UPDATE_CACHE["latest_version"] = persisted.get("latest_version", APP_VERSION)
+                latest_ver = persisted.get("latest_version", APP_VERSION)
+                UPDATE_CACHE["latest_version"] = latest_ver
                 UPDATE_CACHE["release_url"] = persisted.get("release_url", f"https://github.com/{GITHUB_REPO}/releases")
-                UPDATE_CACHE["has_update"] = persisted.get("has_update", False)
+                UPDATE_CACHE["has_update"] = bool(latest_ver and is_newer_version(latest_ver, APP_VERSION))
 
         # 1-hour cache window (3600 seconds) unless forced
         if not force and (now - UPDATE_CACHE["last_checked"] < 3600) and UPDATE_CACHE["last_checked"] > 0:
+            cached_has_update = bool(
+                UPDATE_CACHE["latest_version"]
+                and is_newer_version(UPDATE_CACHE["latest_version"], APP_VERSION)
+            )
             return {
-                "has_update": UPDATE_CACHE["has_update"],
+                "has_update": cached_has_update,
                 "latest_version": UPDATE_CACHE["latest_version"],
                 "release_url": UPDATE_CACHE["release_url"],
                 "current_version": APP_VERSION,
@@ -128,8 +133,12 @@ def check_github_update(force=False, enabled=True):
         with UPDATE_CACHE["lock"]:
             # On error, wait 10 min before re-attempting (cooldown = 3600 - 3000 = 600s)
             UPDATE_CACHE["last_checked"] = now - 3000
+            cached_has_update = bool(
+                UPDATE_CACHE["latest_version"]
+                and is_newer_version(UPDATE_CACHE["latest_version"], APP_VERSION)
+            )
             return {
-                "has_update": UPDATE_CACHE["has_update"],
+                "has_update": cached_has_update,
                 "latest_version": UPDATE_CACHE["latest_version"],
                 "release_url": UPDATE_CACHE["release_url"],
                 "current_version": APP_VERSION,
@@ -148,6 +157,22 @@ def apply_self_update(target_tag: str = "") -> dict:
     base_dir_str = str(BASE_DIR)
     is_git = os.path.isdir(os.path.join(base_dir_str, ".git"))
 
+    def _finalize_update(mode: str, message: str, tag: str) -> dict:
+        now_ts = time.time()
+        final_tag = tag if (tag and tag != "latest") else APP_VERSION
+        with UPDATE_CACHE["lock"]:
+            UPDATE_CACHE["has_update"] = False
+            UPDATE_CACHE["last_checked"] = now_ts
+            if final_tag:
+                UPDATE_CACHE["latest_version"] = final_tag
+        scanner.set_cached_update({
+            "last_checked": now_ts,
+            "latest_version": UPDATE_CACHE["latest_version"],
+            "release_url": UPDATE_CACHE["release_url"],
+            "has_update": False
+        })
+        return {"mode": mode, "message": message, "tag": tag}
+
     if is_git:
         # Check if working tree has uncommitted local changes (e.g. during active development / testing)
         status_check = subprocess.run(["git", "status", "--porcelain"], cwd=base_dir_str, capture_output=True, text=True)
@@ -160,14 +185,14 @@ def apply_self_update(target_tag: str = "") -> dict:
             with open(app_file, "w") as f:
                 f.write(s_content)
             time.sleep(1.0)
-            return {"mode": "git-dev", "message": f"Updated to {new_ver} (development mode)", "tag": new_ver}
+            return _finalize_update("git-dev", f"Updated to {new_ver} (development mode)", new_ver)
 
         cmd = ["git", "pull", "--ff-only"]
         res = subprocess.run(cmd, cwd=base_dir_str, capture_output=True, text=True)
         if res.returncode != 0:
             err_msg = res.stderr.strip() or res.stdout.strip()
             raise RuntimeError(f"Git pull failed: {err_msg}")
-        return {"mode": "git", "message": "Updated via git pull", "tag": target_tag or "latest"}
+        return _finalize_update("git", "Updated via git pull", target_tag or "latest")
 
     if not target_tag:
         info = check_github_update(force=True)
@@ -224,7 +249,7 @@ def apply_self_update(target_tag: str = "") -> dict:
             else:
                 shutil.copy2(src, dst)
 
-        return {"mode": "archive", "message": f"Updated to {target_tag} from archive", "tag": target_tag}
+        return _finalize_update("archive", f"Updated to {target_tag} from archive", target_tag)
 
 
 def trigger_server_restart():

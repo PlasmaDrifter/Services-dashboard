@@ -852,7 +852,7 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.1.4";
+let cachedAppVersion = "v1.1.6";
 let cachedGithubRepo = "PlasmaDrifter/podman-systemd-dashboard";
 
 function loadSavedSettings() {
@@ -1037,6 +1037,25 @@ function checkAppUpdatesAsync(force = false) {
     });
 }
 
+function parseVersionString(v) {
+  if (!v) return [];
+  const cleaned = String(v).trim().replace(/^[vV]/, '');
+  return cleaned.split(/[-.+_]/).map((p) => parseInt(p, 10)).filter((n) => !isNaN(n));
+}
+
+function isNewerVersionString(latest, current) {
+  const l = parseVersionString(latest);
+  const c = parseVersionString(current);
+  const len = Math.max(l.length, c.length);
+  for (let i = 0; i < len; i++) {
+    const lPart = l[i] || 0;
+    const cPart = c[i] || 0;
+    if (lPart > cPart) return true;
+    if (lPart < cPart) return false;
+  }
+  return false;
+}
+
 function renderUpdateUI(info) {
   const ghLink = document.getElementById("nav-github-link");
   const navBadge = document.getElementById("nav-update-badge");
@@ -1047,8 +1066,8 @@ function renderUpdateUI(info) {
   const btnSettings = document.getElementById("btn-settings");
 
   const settingsVer = document.getElementById("settings-app-version");
+  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.1.5");
   if (settingsVer) {
-    const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.1.4");
     settingsVer.textContent = curVer.startsWith("v") ? curVer : `v${curVer}`;
   }
 
@@ -1057,7 +1076,14 @@ function renderUpdateUI(info) {
     return;
   }
 
-  if (info && info.has_update) {
+  const hasValidUpdate = Boolean(
+    info &&
+    info.has_update &&
+    info.latest_version &&
+    isNewerVersionString(info.latest_version, curVer)
+  );
+
+  if (hasValidUpdate) {
     const cleanVer = info.latest_version.startsWith("v") ? info.latest_version : `v${info.latest_version}`;
     const dismissedVer = localStorage.getItem("dashboard_dismissed_update_version");
     const isDismissed = (dismissedVer === info.latest_version);
@@ -1065,7 +1091,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.4'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.6'})`;
     }
 
     if (btnSettings) {
@@ -1120,7 +1146,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.4'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.6'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");
@@ -1289,7 +1315,16 @@ function syncSettingsUI() {
   const bannerVer = document.getElementById("update-banner-version");
   const bannerLink = document.getElementById("update-banner-link");
 
-  if (userSettings.checkForUpdates && appUpdateData && appUpdateData.has_update) {
+  const curVer = (appUpdateData && appUpdateData.current_version) ? appUpdateData.current_version : (cachedAppVersion || "v1.1.5");
+  const hasValidUpdate = Boolean(
+    userSettings.checkForUpdates &&
+    appUpdateData &&
+    appUpdateData.has_update &&
+    appUpdateData.latest_version &&
+    isNewerVersionString(appUpdateData.latest_version, curVer)
+  );
+
+  if (hasValidUpdate) {
     const cleanVer = appUpdateData.latest_version.startsWith("v") ? appUpdateData.latest_version : `v${appUpdateData.latest_version}`;
     const dismissedVer = localStorage.getItem("dashboard_dismissed_update_version");
     const isDismissed = (dismissedVer === appUpdateData.latest_version);
