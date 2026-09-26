@@ -62,21 +62,33 @@ html {
 }
 
 body {
-  background-color: var(--bg-base);
-  color: var(--text-main);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: var(--font-sans);
-  line-height: 1.45;
-  padding: 16px 22px;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.app-layout {
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
 }
 
-/* Density Modifiers */
-body.density-compact {
-  padding: 10px 16px;
+.main-content {
+  padding: 12px 24px 36px;
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
 }
-body.density-compact .dashboard-header {
-  margin-bottom: 10px;
-  padding-bottom: 8px;
+
+/* Density Modifiers */
+body.density-compact .main-content {
+  padding: 8px 16px 24px;
 }
 body.density-compact .toolbar-row {
   margin-bottom: 10px;
@@ -85,15 +97,15 @@ body.density-compact .toolbar-row {
 body.density-compact .stat-card {
   padding: 3px 7px;
 }
-body.density-compact .category-container {
-  gap: 12px;
+body.density-compact .category-section {
+  gap: 6px;
+  margin-bottom: 16px;
 }
-body.density-compact .category-header {
-  padding-bottom: 4px;
+body.density-compact .services-table th {
+  padding: 4px 10px;
 }
-body.density-compact .services-table th,
 body.density-compact .services-table td {
-  padding: 5px 8px;
+  padding: 6px 10px;
 }
 body.density-compact .services-grid {
   gap: 8px;
@@ -102,16 +114,12 @@ body.density-compact .service-card {
   padding: 8px 10px;
 }
 
-body.density-standard {
-  padding: 16px 22px;
+body.density-standard .main-content {
+  padding: 12px 24px 36px;
 }
 
-body.density-spacious {
-  padding: 24px 32px;
-}
-body.density-spacious .dashboard-header {
-  margin-bottom: 18px;
-  padding-bottom: 14px;
+body.density-spacious .main-content {
+  padding: 20px 32px 48px;
 }
 body.density-spacious .toolbar-row {
   margin-bottom: 20px;
@@ -120,15 +128,15 @@ body.density-spacious .toolbar-row {
 body.density-spacious .stat-card {
   padding: 6px 14px;
 }
-body.density-spacious .category-container {
-  gap: 26px;
+body.density-spacious .category-section {
+  gap: 12px;
+  margin-bottom: 32px;
 }
-body.density-spacious .category-header {
-  padding-bottom: 8px;
+body.density-spacious .services-table th {
+  padding: 8px 16px;
 }
-body.density-spacious .services-table th,
 body.density-spacious .services-table td {
-  padding: 10px 16px;
+  padding: 14px 18px;
 }
 body.density-spacious .services-grid {
   gap: 16px;
@@ -137,52 +145,59 @@ body.density-spacious .service-card {
   padding: 16px 18px;
 }
 
-.app-container {
-  max-width: 1440px;
-  margin: 0 auto;
-}
-
-/* Header */
-.dashboard-header {
+/* Top Navigation Bar */
+.top-nav {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
+  padding: 8px 24px;
+  background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
-.header-left {
+.nav-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+}
+
+.brand-icon {
+  background: linear-gradient(135deg, #8aadf4, #c6a0f6);
+  color: #181926;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.header-left .logo-area {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.header-left h1 {
-  font-size: 1.2rem;
+.brand-text h1 {
+  font-size: 16px;
   font-weight: 700;
-  color: var(--text-main);
   letter-spacing: -0.2px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.subtitle {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  margin: 0;
+  color: var(--text-primary);
   line-height: 1.2;
 }
 
+.brand-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 @media (max-width: 960px) {
-  .subtitle {
+  .brand-subtitle {
     display: none;
   }
 }
@@ -195,20 +210,13 @@ body.density-spacious .service-card {
   box-shadow: 0 0 8px var(--success);
 }
 
-.header-right {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-}
-
-.header-actions-row {
+.nav-controls {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.header-actions-row .btn {
+.nav-controls .btn {
   height: 27px;
   padding: 4px 10px;
   font-size: 11px;
@@ -219,9 +227,47 @@ body.density-spacious .service-card {
   gap: 6px;
 }
 
-.header-actions-row .btn svg {
+.nav-controls .btn svg {
   width: 14px;
   height: 14px;
+}
+
+.btn-outline {
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-outline:hover {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.btn-appindex {
+  background-color: rgba(198, 160, 246, 0.12);
+  color: var(--accent-purple);
+  border: 1px solid rgba(198, 160, 246, 0.4);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.btn-appindex:hover {
+  background-color: var(--accent-purple);
+  color: var(--btn-primary-text, #181926);
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 10px rgba(198, 160, 246, 0.35);
+}
+
+.nav-external-arrow {
+  opacity: 0.75;
+  margin-left: -2px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.btn-appindex:hover .nav-external-arrow {
+  opacity: 1;
+  transform: translate(1px, -1px);
 }
 
 /* Nav GitHub Button & Update Badge */
@@ -690,12 +736,12 @@ body.density-spacious .service-card {
 /* ======================================================== */
 /* Table View Mode */
 /* ======================================================== */
-.table-responsive {
+.table-container, .table-responsive {
   width: 100%;
   overflow-x: auto;
+  background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--bg-card);
 }
 
 .services-table {
@@ -706,19 +752,21 @@ body.density-spacious .service-card {
 }
 
 .services-table th {
-  background: var(--bg-surface);
-  padding: 8px 14px;
+  background-color: var(--bg-card);
+  padding: 6px 14px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
-  font-size: 0.74rem;
-  letter-spacing: 0.5px;
+  font-size: calc(11px * var(--font-scale, 1));
+  line-height: 1.2;
+  white-space: nowrap;
   border-bottom: 1px solid var(--border-color);
 }
 
 .services-table td {
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 12px 14px;
+  font-size: calc(14px * var(--font-scale, 1));
+  border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
 }
 
@@ -727,7 +775,7 @@ body.density-spacious .service-card {
 }
 
 .services-table tr:hover {
-  background: var(--bg-card-hover);
+  background-color: var(--bg-card-hover);
 }
 
 .table-service-name {
@@ -755,12 +803,19 @@ body.density-spacious .service-card {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 
 .table-actions .btn {
-  padding: 4px 9px;
-  font-size: 0.76rem;
-  border-radius: 4px;
+  height: 27px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-sm, 4px);
+  line-height: normal;
+  box-sizing: border-box;
+  white-space: nowrap;
 }
 
 /* Buttons */

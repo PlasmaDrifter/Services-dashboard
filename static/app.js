@@ -337,7 +337,7 @@ function renderContent() {
 
     // Body: Table Mode
     const tableWrapper = document.createElement('div');
-    tableWrapper.className = 'table-responsive';
+    tableWrapper.className = 'table-container';
     tableWrapper.innerHTML = renderTableHTML(categoryItems);
     section.appendChild(tableWrapper);
 
@@ -421,7 +421,7 @@ function renderTableHTML(items) {
           <th>Description</th>
           <th style="text-align: center;">Web UI</th>
           <th>Timer / Schedule</th>
-          <th style="text-align: right;">Actions</th>
+          <th style="text-align: right; width: 280px; min-width: 260px;">Action</th>
         </tr>
       </thead>
       <tbody>
