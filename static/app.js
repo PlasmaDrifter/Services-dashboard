@@ -941,13 +941,15 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.1.7";
+let cachedAppVersion = "v1.1.8";
 let cachedGithubRepo = "PlasmaDrifter/podman-systemd-dashboard";
 
 function loadSavedSettings() {
+  let hasLocalSettings = false;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
+      hasLocalSettings = true;
       const parsed = JSON.parse(raw);
       userSettings = {
         themeId: parsed.themeId || "catppuccin",
@@ -974,11 +976,50 @@ function loadSavedSettings() {
         if (data.app_version) cachedAppVersion = data.app_version;
         if (data.github_repo) cachedGithubRepo = data.github_repo;
         const s = data.settings || {};
-        if (s.show_appindex_link !== undefined) userSettings.showAppIndexLink = Boolean(s.show_appindex_link);
-        if (s.open_appindex_same_tab !== undefined) userSettings.openAppIndexInSameTab = Boolean(s.open_appindex_same_tab);
-        if (s.appindex_url) userSettings.appIndexUrl = s.appindex_url;
-        if (s.show_github_btn !== undefined) userSettings.showGitHubBtn = Boolean(s.show_github_btn);
-        if (s.check_for_updates !== undefined) userSettings.checkForUpdates = Boolean(s.check_for_updates);
+
+        let needsSaveToLocal = false;
+        let needsSaveToBackend = false;
+
+        // If backend explicitly has show_appindex_link = true, adopt it
+        if (s.show_appindex_link === true && !userSettings.showAppIndexLink) {
+          userSettings.showAppIndexLink = true;
+          needsSaveToLocal = true;
+        } else if (userSettings.showAppIndexLink && s.show_appindex_link !== true) {
+          // If local explicitly has it enabled but backend does not, sync local setting to backend
+          needsSaveToBackend = true;
+        }
+
+        if (s.open_appindex_same_tab === true && !userSettings.openAppIndexInSameTab) {
+          userSettings.openAppIndexInSameTab = true;
+          needsSaveToLocal = true;
+        } else if (userSettings.openAppIndexInSameTab && s.open_appindex_same_tab !== true) {
+          needsSaveToBackend = true;
+        }
+
+        if (s.appindex_url && s.appindex_url !== "http://localhost:8765" && userSettings.appIndexUrl === "http://localhost:8765") {
+          userSettings.appIndexUrl = s.appindex_url;
+          needsSaveToLocal = true;
+        }
+
+        if (s.show_github_btn !== undefined && !hasLocalSettings) {
+          userSettings.showGitHubBtn = Boolean(s.show_github_btn);
+          needsSaveToLocal = true;
+        }
+
+        if (s.check_for_updates !== undefined && !hasLocalSettings) {
+          userSettings.checkForUpdates = Boolean(s.check_for_updates);
+          needsSaveToLocal = true;
+        }
+
+        if (needsSaveToLocal) {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(userSettings));
+          } catch (e) {}
+        }
+
+        if (needsSaveToBackend) {
+          saveSettingsToStorage();
+        }
 
         if (data.update_info) {
           appUpdateData = data.update_info;
@@ -1002,6 +1043,7 @@ function saveSettingsToStorage() {
   fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    keepalive: true,
     body: JSON.stringify({
       show_github_btn: userSettings.showGitHubBtn,
       check_for_updates: userSettings.checkForUpdates,
@@ -1180,7 +1222,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.7'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.8'})`;
     }
 
     if (btnSettings) {
@@ -1235,7 +1277,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.7'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.8'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");
@@ -1895,6 +1937,9 @@ function closeSettingsModal() {
   if (modal) {
     document.querySelectorAll(".help-popover").forEach((p) => (p.style.display = "none"));
     document.querySelectorAll(".help-circle-btn").forEach((b) => b.classList.remove("active"));
+
+    saveSettingsToStorage();
+    applyAllActiveSettings();
 
     modal.classList.remove("open");
     modal.style.display = "none";

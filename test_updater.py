@@ -178,6 +178,35 @@ class TestUpdaterEndpoints(unittest.TestCase):
             saved = mock_set_cache.call_args[0][0]
             self.assertFalse(saved["has_update"])
 
+    def test_settings_endpoints(self):
+        import tempfile
+        import scanner
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_meta_file = Path(temp_dir) / "metadata.json"
+            with patch.object(scanner, "METADATA_FILE", test_meta_file):
+                # GET initial settings
+                res = self.client.get("/api/settings")
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertEqual(data.get("status"), "ok")
+                self.assertFalse(data["settings"]["show_appindex_link"])
+
+                # POST update show_appindex_link
+                post_res = self.client.post("/api/settings", json={"show_appindex_link": True, "open_appindex_same_tab": True})
+                self.assertEqual(post_res.status_code, 200)
+                post_data = post_res.json()
+                self.assertEqual(post_data.get("status"), "ok")
+                self.assertTrue(post_data["settings"]["show_appindex_link"])
+                self.assertTrue(post_data["settings"]["open_appindex_same_tab"])
+
+                # Verify persistence
+                verify_res = self.client.get("/api/settings")
+                self.assertEqual(verify_res.status_code, 200)
+                self.assertTrue(verify_res.json()["settings"]["show_appindex_link"])
+
 if __name__ == "__main__":
     unittest.main()
 

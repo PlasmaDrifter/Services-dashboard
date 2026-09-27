@@ -4,6 +4,8 @@ import re
 import json
 import time
 import shutil
+import tempfile
+import threading
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +13,7 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".config" / "systemd" / "user"
 QUADLET_DIR = Path.home() / ".config" / "containers" / "systemd"
 METADATA_FILE = Path(__file__).resolve().parent / "metadata.json"
+metadata_lock = threading.RLock()
 
 KNOWN_PORTS = {
     "mam-bonus-store.service": 5000,
@@ -43,49 +46,58 @@ KNOWN_PORTS = {
 }
 
 def load_metadata():
-    if METADATA_FILE.exists():
-        try:
-            with open(METADATA_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    with metadata_lock:
+        if METADATA_FILE.exists():
+            try:
+                with open(METADATA_FILE, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
 
 def save_metadata(data):
-    try:
-        with open(METADATA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print("Error saving metadata:", e)
+    with metadata_lock:
+        try:
+            dir_name = METADATA_FILE.parent
+            fd, tmp_path = tempfile.mkstemp(prefix="metadata_", suffix=".tmp", dir=str(dir_name))
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, METADATA_FILE)
+        except Exception as e:
+            print("Error saving metadata:", e)
 
 def get_settings():
-    meta = load_metadata()
-    default_settings = {
-        "show_github_btn": True,
-        "check_for_updates": True,
-        "show_appindex_link": False,
-        "open_appindex_same_tab": False,
-        "appindex_url": "http://localhost:8765"
-    }
-    saved = meta.get("settings", {})
-    return {**default_settings, **saved}
+    with metadata_lock:
+        meta = load_metadata()
+        default_settings = {
+            "show_github_btn": True,
+            "check_for_updates": True,
+            "show_appindex_link": False,
+            "open_appindex_same_tab": False,
+            "appindex_url": "http://localhost:8765"
+        }
+        saved = meta.get("settings", {})
+        return {**default_settings, **saved}
 
 def update_settings(new_settings: dict):
-    meta = load_metadata()
-    current = meta.get("settings", {})
-    current.update(new_settings)
-    meta["settings"] = current
-    save_metadata(meta)
-    return current
+    with metadata_lock:
+        meta = load_metadata()
+        current = meta.get("settings", {})
+        current.update(new_settings)
+        meta["settings"] = current
+        save_metadata(meta)
+        return current
 
 def get_cached_update():
-    meta = load_metadata()
-    return meta.get("update_cache", {})
+    with metadata_lock:
+        meta = load_metadata()
+        return meta.get("update_cache", {})
 
 def set_cached_update(update_data: dict):
-    meta = load_metadata()
-    meta["update_cache"] = update_data
-    save_metadata(meta)
+    with metadata_lock:
+        meta = load_metadata()
+        meta["update_cache"] = update_data
+        save_metadata(meta)
 
 def detect_port_from_content(content):
     matches = re.findall(r'(?:PublishPort|--port|=port|-p|:)\s*=?\s*([0-9]{4,5})', content, re.IGNORECASE)

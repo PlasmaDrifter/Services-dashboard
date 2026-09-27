@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.1.7"
+APP_VERSION = "v1.1.8"
 GITHUB_REPO = "PlasmaDrifter/podman-systemd-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
