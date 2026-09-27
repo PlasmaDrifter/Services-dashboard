@@ -941,7 +941,7 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.1.6";
+let cachedAppVersion = "v1.1.7";
 let cachedGithubRepo = "PlasmaDrifter/podman-systemd-dashboard";
 
 function loadSavedSettings() {
@@ -1180,7 +1180,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.6'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.7'})`;
     }
 
     if (btnSettings) {
@@ -1235,7 +1235,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.6'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.7'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");
