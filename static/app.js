@@ -25,6 +25,64 @@ document.addEventListener('DOMContentLoaded', () => {
   checkAppUpdatesAsync();
 });
 
+function updateStatCardActiveState() {
+  document.querySelectorAll('.stat-card').forEach(card => {
+    const cat = card.dataset.category;
+    let isActive = false;
+
+    if (currentCategoryFilter === 'all') {
+      if (currentFilter === 'running' && cat === 'running') {
+        isActive = true;
+      } else if (currentFilter === 'all' && cat === 'all') {
+        isActive = true;
+      }
+    } else {
+      if (cat === currentCategoryFilter) {
+        isActive = true;
+      }
+    }
+
+    if (isActive) {
+      card.classList.add('active');
+      card.setAttribute('aria-pressed', 'true');
+    } else {
+      card.classList.remove('active');
+      card.setAttribute('aria-pressed', 'false');
+    }
+  });
+}
+
+function handleStatCardSelection(card) {
+  const cat = card.dataset.category;
+  const isCurrentlyActive = card.classList.contains('active');
+
+  // Toggle behavior: if clicking the active category card (other than 'all'), toggle off back to 'all'
+  if (isCurrentlyActive && cat !== 'all') {
+    currentCategoryFilter = 'all';
+    currentFilter = 'all';
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+    if (allBtn) allBtn.classList.add('active');
+  } else if (cat === 'all') {
+    currentCategoryFilter = 'all';
+    currentFilter = 'all';
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+    if (allBtn) allBtn.classList.add('active');
+  } else if (cat === 'running') {
+    currentFilter = 'running';
+    currentCategoryFilter = 'all';
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    const runBtn = document.querySelector('.filter-btn[data-filter="running"]');
+    if (runBtn) runBtn.classList.add('active');
+  } else {
+    currentCategoryFilter = cat;
+  }
+
+  updateStatCardActiveState();
+  renderContent();
+}
+
 function initEventListeners() {
   // Scan button
   document.getElementById('btn-scan').addEventListener('click', handleManualScan);
@@ -42,28 +100,19 @@ function initEventListeners() {
       document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentFilter = btn.dataset.filter;
+      updateStatCardActiveState();
       renderContent();
     });
   });
 
-  // Stat cards filter click
+  // Stat cards filter click & keyboard accessibility
   document.querySelectorAll('.stat-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const cat = card.dataset.category;
-      if (cat === 'all') {
-        currentCategoryFilter = 'all';
-        currentFilter = 'all';
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        document.querySelector('.filter-btn[data-filter="all"]').classList.add('active');
-      } else if (cat === 'running') {
-        currentFilter = 'running';
-        currentCategoryFilter = 'all';
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        document.querySelector('.filter-btn[data-filter="running"]').classList.add('active');
-      } else {
-        currentCategoryFilter = cat;
+    card.addEventListener('click', () => handleStatCardSelection(card));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleStatCardSelection(card);
       }
-      renderContent();
     });
   });
 
@@ -290,10 +339,25 @@ function renderContent() {
   const container = document.getElementById('categories-container');
   container.innerHTML = '';
 
+  updateStatCardActiveState();
+
   const items = getUnifiedItems();
 
   if (items.length === 0) {
-    container.innerHTML = '<div class="empty-state">No matching services or timers found.</div>';
+    const isFiltered = (currentCategoryFilter !== 'all');
+    let resetBtn = '';
+    if (isFiltered) {
+      resetBtn = `<br><button class="btn btn-secondary btn-sm" id="btn-empty-clear-category" style="margin-top: 10px;">Show All Categories</button>`;
+    }
+    container.innerHTML = `<div class="empty-state">No matching services or timers found.${resetBtn}</div>`;
+    const emptyClear = document.getElementById('btn-empty-clear-category');
+    if (emptyClear) {
+      emptyClear.addEventListener('click', () => {
+        currentCategoryFilter = 'all';
+        updateStatCardActiveState();
+        renderContent();
+      });
+    }
     return;
   }
 
@@ -316,6 +380,21 @@ function renderContent() {
     const section = document.createElement('section');
     section.className = 'category-section';
 
+    const isFilteredCategory = (currentCategoryFilter !== 'all');
+    if (isFilteredCategory) {
+      section.classList.add('is-filtered');
+    }
+
+    let filterPillHtml = '';
+    if (isFilteredCategory) {
+      filterPillHtml = `
+        <button class="category-filter-pill" id="btn-clear-category-filter" title="Clear category filter and show all">
+          <span>Filtered</span>
+          <span class="pill-close">&times;</span>
+        </button>
+      `;
+    }
+
     // Category Header
     const header = document.createElement('div');
     header.className = 'category-header';
@@ -330,10 +409,20 @@ function renderContent() {
       <div class="category-title-area">
         <h2 class="category-title">${escapeHtml(categoryName)}</h2>
         <span class="category-badge">${categoryItems.length}</span>
+        ${filterPillHtml}
       </div>
       ${lastScanHtml}
     `;
     section.appendChild(header);
+
+    const clearBtn = header.querySelector('#btn-clear-category-filter');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        currentCategoryFilter = 'all';
+        updateStatCardActiveState();
+        renderContent();
+      });
+    }
 
     // Body: Table Mode
     const tableWrapper = document.createElement('div');

@@ -358,6 +358,8 @@ body.density-spacious .service-card {
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
+  outline: none;
+  position: relative;
 }
 
 .stat-card:hover {
@@ -365,9 +367,49 @@ body.density-spacious .service-card {
   background: var(--bg-card);
 }
 
+.stat-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .stat-card.active {
   border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow: 0 0 0 1px var(--primary), 0 2px 8px rgba(59, 130, 246, 0.25);
+}
+
+.stat-card.active .stat-label {
+  color: var(--text-main);
+}
+
+.stat-card.active[data-category="all"] {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow: 0 0 0 1px var(--primary), 0 2px 8px rgba(59, 130, 246, 0.25);
+}
+
+.stat-card.active[data-category="running"] {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.16);
+  box-shadow: 0 0 0 1px var(--success), 0 2px 8px rgba(16, 185, 129, 0.25);
+}
+
+.stat-card.active[data-category="web"] {
+  border-color: var(--purple);
+  background: rgba(168, 85, 247, 0.16);
+  box-shadow: 0 0 0 1px var(--purple), 0 2px 8px rgba(168, 85, 247, 0.25);
+}
+
+.stat-card.active[data-category="containers"] {
+  border-color: var(--cyan);
+  background: rgba(6, 182, 212, 0.16);
+  box-shadow: 0 0 0 1px var(--cyan), 0 2px 8px rgba(6, 182, 212, 0.25);
+}
+
+.stat-card.active[data-category="timers"] {
+  border-color: var(--blue);
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow: 0 0 0 1px var(--blue), 0 2px 8px rgba(59, 130, 246, 0.25);
 }
 
 .stat-label {
@@ -506,6 +548,38 @@ body.density-spacious .service-card {
   border-radius: 12px;
   background: rgba(255,255,255,0.08);
   color: var(--text-dim);
+}
+
+.category-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--primary);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  line-height: 1.4;
+}
+
+.category-filter-pill:hover {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: var(--primary);
+}
+
+.category-filter-pill .pill-close {
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.category-section.is-filtered .category-header {
+  border-bottom-color: var(--border-color);
 }
 
 /* Grid (Card Mode) */
