@@ -39,6 +39,7 @@ KNOWN_PORTS = {
     "beszel.service": 8090,
     "beszel": 8090,
     "services-dashboard.service": 5100,
+    "services-dashboard": 5100,
     "podman-systemd-dashboard.service": 5100,
     "podman-systemd-dashboard": 5100,
     "yt-dlp-server.service": 16800,

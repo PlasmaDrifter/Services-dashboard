@@ -54,7 +54,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
             tar_path = os.path.join(temp_dir, "sample.tar.gz")
             with tarfile.open(tar_path, "w:gz") as tar:
                 content = b"print('updated')\n"
-                info = tarfile.TarInfo(name="podman-systemd-dashboard-1.2.0/test_file.py")
+                info = tarfile.TarInfo(name="Services-dashboard-1.2.0/test_file.py")
                 info.size = len(content)
                 tar.addfile(info, io.BytesIO(content))
 
@@ -66,7 +66,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
                 else:
                     tar.extractall(path=dest_dir)
 
-            extracted_file = os.path.join(dest_dir, "podman-systemd-dashboard-1.2.0", "test_file.py")
+            extracted_file = os.path.join(dest_dir, "Services-dashboard-1.2.0", "test_file.py")
             self.assertTrue(os.path.isfile(extracted_file))
             with open(extracted_file, "r") as f:
                 self.assertIn("updated", f.read())
@@ -141,7 +141,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
         stale_meta = {
             "last_checked": time.time() - 300,
             "latest_version": app.APP_VERSION,
-            "release_url": "https://github.com/PlasmaDrifter/podman-systemd-dashboard/releases/tag/" + app.APP_VERSION,
+            "release_url": "https://github.com/PlasmaDrifter/Services-dashboard/releases/tag/" + app.APP_VERSION,
             "has_update": True,
         }
 

@@ -21,7 +21,7 @@ import uvicorn
 import scanner
 
 APP_VERSION = "v1.2.0"
-GITHUB_REPO = "PlasmaDrifter/podman-systemd-dashboard"
+GITHUB_REPO = "PlasmaDrifter/Services-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -100,7 +100,7 @@ def check_github_update(force=False, enabled=True):
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": f"podman-systemd-dashboard-UpdateChecker/{APP_VERSION}",
+                "User-Agent": f"Services-dashboard-UpdateChecker/{APP_VERSION}",
                 "Accept": "application/vnd.github.v3+json"
             }
         )
@@ -242,7 +242,7 @@ def apply_self_update(target_tag: str = "") -> dict:
 
         req = urllib.request.Request(
             archive_url,
-            headers={"User-Agent": f"podman-systemd-dashboard-SelfUpdater/{APP_VERSION}"},
+            headers={"User-Agent": f"Services-dashboard-SelfUpdater/{APP_VERSION}"},
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp, open(archive_file, "wb") as f_out:
@@ -251,7 +251,7 @@ def apply_self_update(target_tag: str = "") -> dict:
             fallback_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
             req_fb = urllib.request.Request(
                 fallback_url,
-                headers={"User-Agent": f"podman-systemd-dashboard-SelfUpdater/{APP_VERSION}"},
+                headers={"User-Agent": f"Services-dashboard-SelfUpdater/{APP_VERSION}"},
             )
             with urllib.request.urlopen(req_fb, timeout=30) as resp, open(archive_file, "wb") as f_out:
                 shutil.copyfileobj(resp, f_out)
@@ -316,7 +316,7 @@ async def lifespan(app: FastAPI):
     scanner_thread.start()
     yield
 
-app = FastAPI(title="podman-systemd-dashboard", lifespan=lifespan)
+app = FastAPI(title="Services-dashboard", lifespan=lifespan)
 
 class FileUpdateRequest(BaseModel):
     content: str
@@ -513,7 +513,7 @@ def root_index():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-    return "<h1>podman-systemd-dashboard</h1><p>Static files loading...</p>"
+    return "<h1>services-dashboard</h1><p>Static files loading...</p>"
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=5100, reload=False, log_level="info")

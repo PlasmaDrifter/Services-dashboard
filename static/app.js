@@ -1514,7 +1514,7 @@ let userSettings = {
 
 let appUpdateData = null;
 let cachedAppVersion = "v1.2.0";
-let cachedGithubRepo = "PlasmaDrifter/podman-systemd-dashboard";
+let cachedGithubRepo = "PlasmaDrifter/Services-dashboard";
 
 function loadSavedSettings() {
   let hasLocalSettings = false;
@@ -1804,7 +1804,7 @@ function renderUpdateUI(info) {
 
     if (ghLink) {
       ghLink.classList.remove("has-update");
-      ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
+      ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
       ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
     }
 
@@ -1831,7 +1831,7 @@ function renderUpdateUI(info) {
         if (bannerLink && info.release_url) bannerLink.href = info.release_url;
         const bannerCodeLink = document.getElementById("update-banner-code-link");
         if (bannerCodeLink) {
-          bannerCodeLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}/tree/${cleanVer}`;
+          bannerCodeLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}/tree/${cleanVer}`;
         }
       }
     } else {
@@ -1859,7 +1859,7 @@ function clearUpdateIndicator() {
   }
   if (ghLink) {
     ghLink.classList.remove("has-update");
-    ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
+    ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
     ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
   }
   if (navBadge) {
@@ -1876,7 +1876,7 @@ function clearUpdateIndicator() {
 
 async function executeSelfUpdate() {
   const versionStr = appUpdateData && appUpdateData.latest_version ? ` to ${appUpdateData.latest_version}` : "";
-  const confirmed = window.confirm(`Update podman-systemd-dashboard${versionStr}? The server will automatically download changes and restart.`);
+  const confirmed = window.confirm(`Update Services-dashboard${versionStr}? The server will automatically download changes and restart.`);
   if (!confirmed) return;
 
   const btnApply = document.getElementById("btn-apply-update");

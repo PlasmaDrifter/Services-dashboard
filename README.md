@@ -1,4 +1,4 @@
-# podman-systemd-dashboard
+# Services Dashboard
 
 A lightweight, high-performance web dashboard for monitoring, inspecting, and managing rootless Podman Quadlet containers, user-level systemd services, scheduled timers, system maintenance tasks, and cron jobs.
 
@@ -10,7 +10,7 @@ A lightweight, high-performance web dashboard for monitoring, inspecting, and ma
 
 ## Overview
 
-`podman-systemd-dashboard` provides a single pane of glass for Linux user services, rootless containers, and system-level maintenance tasks. Built with FastAPI and vanilla JavaScript, it runs with zero heavyweight frontend build steps, no external dependencies, and minimal memory overhead.
+`Services-dashboard` provides a single pane of glass for Linux user services, rootless containers, and system-level maintenance tasks. Built with FastAPI and vanilla JavaScript, it runs with zero heavyweight frontend build steps, no external dependencies, and minimal memory overhead.
 
 ## Key Features
 
@@ -45,8 +45,8 @@ pip install -r requirements.txt
 ### 1. Clone and Install
 
 ```bash
-git clone https://github.com/PlasmaDrifter/podman-systemd-dashboard.git
-cd podman-systemd-dashboard
+git clone https://github.com/PlasmaDrifter/Services-dashboard.git
+cd Services-dashboard
 pip install -r requirements.txt
 ```
 
@@ -66,20 +66,20 @@ To run automatically in the background on system boot:
 1. Copy the unit file to your user systemd directory:
    ```bash
    mkdir -p ~/.config/systemd/user/
-   cp podman-systemd-dashboard.service ~/.config/systemd/user/
+   cp services-dashboard.service ~/.config/systemd/user/
    ```
 
-2. Adjust the `WorkingDirectory` and `ExecStart` paths in `~/.config/systemd/user/podman-systemd-dashboard.service` if your installation path differs.
+2. Adjust the `WorkingDirectory` and `ExecStart` paths in `~/.config/systemd/user/services-dashboard.service` if your installation path differs (the unit uses `%h` to resolve your home directory automatically).
 
 3. Reload and enable the service:
    ```bash
    systemctl --user daemon-reload
-   systemctl --user enable --now podman-systemd-dashboard.service
+   systemctl --user enable --now services-dashboard.service
    ```
 
 4. Check the service status:
    ```bash
-   systemctl --user status podman-systemd-dashboard.service
+   systemctl --user status services-dashboard.service
    ```
 
 ## Configuration & Architecture

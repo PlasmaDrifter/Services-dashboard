@@ -1,0 +1,13 @@
+[Unit]
+Description=Services Dashboard - Background Services & Tasks
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Source/services-dashboard
+ExecStart=/usr/bin/python3 %h/Source/services-dashboard/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
