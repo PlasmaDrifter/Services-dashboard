@@ -1,24 +1,32 @@
 # podman-systemd-dashboard
 
-A lightweight, high-performance web dashboard for monitoring, inspecting, and managing rootless Podman Quadlet containers, user-level systemd services, and scheduled timers.
+A lightweight, high-performance web dashboard for monitoring, inspecting, and managing rootless Podman Quadlet containers, user-level systemd services, scheduled timers, system maintenance tasks, and cron jobs.
 
-![Dashboard Preview](assets/screenshot.png)
+### User Services View
+![User Services View](assets/user-services.png)
+
+### System Tasks View
+![System Tasks View](assets/system-tasks.png)
 
 ## Overview
 
-`podman-systemd-dashboard` provides a single pane of glass for Linux user services and rootless containers. Built with FastAPI and vanilla JavaScript, it runs with zero heavyweight frontend build steps and minimal memory overhead.
+`podman-systemd-dashboard` provides a single pane of glass for Linux user services, rootless containers, and system-level maintenance tasks. Built with FastAPI and vanilla JavaScript, it runs with zero heavyweight frontend build steps, no external dependencies, and minimal memory overhead.
 
 ## Key Features
 
-- **Podman Quadlet Discovery**: Automatically scans and detects rootless Podman containers defined in `~/.config/containers/systemd/`.
-- **Systemd User Units & Timers**: Discovers and monitors background user services (`~/.config/systemd/user/`) and associated `.timer` schedules with next-trigger timing.
+- **Dual-View Navigation**: Seamlessly toggle between **User Services** (containers, user services, web apps) and **System Tasks** (system timers, cron schedules, socket/path watchers) directly from the header navigation.
+- **Podman Quadlet & Container Discovery**: Automatically scans and detects rootless Podman containers defined in `~/.config/containers/systemd/` as well as standalone Podman and Docker containers.
+- **Systemd User Units & Timers**: Discovers and monitors background user services (`~/.config/systemd/user/`) and associated `.timer` schedules with next-trigger countdowns and last-run timestamps.
+- **System-Wide Maintenance Timers**: Inspects systemd system timers (such as `fstrim.timer`, `logrotate.timer`, `btrfs-scrub.timer`, `sysstat`, etc.) with next-trigger countdowns and previous execution history.
+- **Cron Job Scanner**: Scans user crontab (`crontab -l`) and system cron directories (`/etc/cron.d/`, `/etc/cron.daily/`, etc.), displaying schedules, script paths, and execution commands.
+- **Sockets & Path Watchers**: Live visibility into active socket listeners (`*.socket`) and filesystem path monitors (`*.path`) across system and user scopes.
+- **Failed Unit Diagnostics**: Real-time alert section surfacing any failed or degraded units across both user and system scopes.
 - **Port & Web App Detection**: Inspects container configs and unit files to detect published ports, providing direct launch links for self-hosted web applications.
+- **Safe Unit Inspection & Scoped Logs**: Stream recent service logs in real time (`journalctl -u`) and inspect raw unit definitions in-browser (`systemctl cat`) in read-only mode.
 - **Service Controls**: Start, stop, and restart user services directly from the browser UI.
-- **Built-in Unit File Editor**: Safely view and edit `.service` and `.container` unit files in-browser with automatic backup creation (`.bak`) before saving.
-- **Live Journalctl Logs**: View recent service logs in real time with line-count controls and auto-refresh.
-- **Instant Search & Quick Filters**: Search by service name, description, or port; filter by status (All, Running, Stopped) or category.
+- **Built-in Unit File Editor**: Safely view and edit user `.service` and `.container` unit files in-browser with automatic backup creation (`.bak`) before saving.
+- **Instant Search & Quick Filters**: Search by service name, description, command, or port; filter by status (All, Running, Stopped) or category.
 - **Theme Customization**: Includes multiple modern dark and light color themes, plus a built-in theme builder with real-time preview and browser persistence.
-- **Compact & Responsive UI**: Dense layout optimized for quick status overviews and minimal screen footprint.
 - **Zero-Terminal Self-Updater**: In-app one-click self-updater supporting both Git and standalone installations with automatic server restart.
 
 ## Requirements
