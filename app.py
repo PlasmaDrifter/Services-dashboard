@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.1.9"
+APP_VERSION = "v1.2.0"
 GITHUB_REPO = "PlasmaDrifter/podman-systemd-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,6 +29,7 @@ STATIC_DIR = BASE_DIR / "static"
 # In-memory cached scan result
 cache_lock = threading.Lock()
 cached_data = None
+cached_system_data = None
 
 UPDATE_CACHE = {
     "last_checked": 0,
@@ -380,11 +381,38 @@ def perform_action(name: str, req: ActionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/service/{name}/logs")
-def get_logs(name: str, lines: int = 100):
+def get_logs(name: str, lines: int = 100, scope: str = "user"):
     try:
         lines_count = min(max(int(lines), 1), 1000)
-        logs = scanner.get_service_logs(name, lines=lines_count)
-        return {"name": name, "logs": logs}
+        logs = scanner.get_service_logs(name, lines=lines_count, scope=scope)
+        return {"name": name, "scope": scope, "logs": logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/system-tasks")
+def get_system_tasks():
+    global cached_system_data
+    with cache_lock:
+        if cached_system_data is None:
+            cached_system_data = scanner.scan_system_tasks()
+        return cached_system_data
+
+@app.post("/api/system-tasks/scan")
+def trigger_system_tasks_scan():
+    global cached_system_data
+    try:
+        new_data = scanner.scan_system_tasks()
+        with cache_lock:
+            cached_system_data = new_data
+        return {"status": "ok", "data": cached_system_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/system-unit/{name}/cat")
+def get_system_unit_definition(name: str, scope: str = "system"):
+    try:
+        content = scanner.get_system_unit_cat(name, scope=scope)
+        return {"name": name, "scope": scope, "content": content}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

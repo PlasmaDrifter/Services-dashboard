@@ -506,12 +506,17 @@ def service_action(unit_name, action):
         raise RuntimeError(res.stderr.strip() or f"Failed to {action} {unit_name}")
     return True
 
-def get_service_logs(unit_name, lines=100):
+def get_service_logs(unit_name, lines=100, scope="user"):
     if not shutil.which("journalctl"):
         return "journalctl is not available on this system."
 
+    cmd = ["journalctl"]
+    if scope == "user":
+        cmd.append("--user")
+    cmd.extend(["-u", unit_name, "-n", str(lines), "--no-pager"])
+
     res = subprocess.run(
-        ["journalctl", "--user", "-u", unit_name, "-n", str(lines), "--no-pager"],
+        cmd,
         capture_output=True, text=True, timeout=5
     )
     if res.stdout:
@@ -519,3 +524,345 @@ def get_service_logs(unit_name, lines=100):
     if res.stderr and res.returncode != 0:
         return f"Error reading logs: {res.stderr.strip()}"
     return ""
+
+def format_relative_left(seconds: float) -> str:
+    if seconds is None:
+        return ""
+    if seconds < 0:
+        return "passed"
+    secs = int(seconds)
+    if secs < 60:
+        return f"{secs}s left"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}min left"
+    hours = mins // 60
+    if hours < 24:
+        rem_mins = mins % 60
+        return f"{hours}h {rem_mins}m left"
+    days = hours // 24
+    rem_h = hours % 24
+    return f"{days}d {rem_h}h left"
+
+def format_relative_passed(seconds: float) -> str:
+    if seconds is None or seconds <= 0:
+        return ""
+    secs = int(seconds)
+    if secs < 60:
+        return f"{secs}s ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}min ago"
+    hours = mins // 60
+    if hours < 24:
+        rem_m = mins % 60
+        return f"{hours}h {rem_m}m ago"
+    days = hours // 24
+    rem_h = hours % 24
+    return f"{days}d {rem_h}h ago"
+
+def scan_system_timers():
+    """
+    Scans system-level systemd timers via `systemctl list-timers --all --output=json`
+    and correlates them with unit descriptions.
+    """
+    if not shutil.which("systemctl"):
+        return []
+
+    timer_units = {}
+    try:
+        p_units = subprocess.run(
+            ["systemctl", "list-units", "--type=timer", "--all", "--output=json"],
+            capture_output=True, text=True, timeout=5
+        )
+        if p_units.returncode == 0 and p_units.stdout:
+            data = json.loads(p_units.stdout)
+            for item in data:
+                u = item.get("unit")
+                if u:
+                    timer_units[u] = item
+    except Exception as e:
+        print("Error fetching system timer units:", e)
+
+    timers_list = []
+    try:
+        p = subprocess.run(
+            ["systemctl", "list-timers", "--all", "--output=json"],
+            capture_output=True, text=True, timeout=5
+        )
+        if p.returncode == 0 and p.stdout:
+            timers_json = json.loads(p.stdout)
+            now_ts = time.time()
+            for t in timers_json:
+                unit_name = t.get("unit")
+                if not unit_name:
+                    continue
+
+                activates = t.get("activates", unit_name.replace(".timer", ".service"))
+                unit_info = timer_units.get(unit_name, {})
+                desc = unit_info.get("description", "")
+
+                next_val = t.get("next")
+                next_str = "n/a"
+                left_str = ""
+                if isinstance(next_val, (int, float)) and next_val > 0:
+                    next_sec = next_val / 1_000_000
+                    next_str = datetime.fromtimestamp(next_sec).strftime("%Y-%m-%d %H:%M:%S")
+                    diff_left = next_sec - now_ts
+                    left_str = format_relative_left(diff_left)
+
+                last_val = t.get("last")
+                last_str = "-"
+                passed_str = ""
+                if isinstance(last_val, (int, float)) and last_val > 0:
+                    last_sec = last_val / 1_000_000
+                    last_str = datetime.fromtimestamp(last_sec).strftime("%Y-%m-%d %H:%M:%S")
+                    diff_passed = now_ts - last_sec
+                    passed_str = format_relative_passed(diff_passed)
+
+                timers_list.append({
+                    "name": unit_name,
+                    "type": "timer",
+                    "scope": "system",
+                    "activates": activates,
+                    "description": desc or f"System maintenance timer: {unit_name}",
+                    "active_state": unit_info.get("active", "active"),
+                    "sub_state": unit_info.get("sub", "waiting"),
+                    "next_str": next_str,
+                    "left_str": left_str,
+                    "last_str": last_str,
+                    "passed_str": passed_str
+                })
+    except Exception as e:
+        print("Error fetching system timers:", e)
+
+    return sorted(timers_list, key=lambda x: x["name"])
+
+def scan_cron_jobs():
+    """
+    Scans user crontab (`crontab -l`) and system cron directories (`/etc/cron.*`).
+    """
+    cron_items = []
+
+    # 1. User crontab
+    if shutil.which("crontab"):
+        try:
+            p = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
+            if p.returncode == 0 and p.stdout:
+                for line_idx, raw_line in enumerate(p.stdout.splitlines(), start=1):
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+
+                    schedule = ""
+                    command = ""
+                    if line.startswith("@"):
+                        parts = line.split(maxsplit=1)
+                        schedule = parts[0]
+                        command = parts[1] if len(parts) > 1 else ""
+                    else:
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            schedule = " ".join(parts[:5])
+                            command = " ".join(parts[5:])
+                        else:
+                            schedule = "custom"
+                            command = line
+
+                    cron_items.append({
+                        "name": f"User Crontab (line {line_idx})",
+                        "scope": "user",
+                        "type": "cron",
+                        "source": "crontab -l",
+                        "schedule": schedule,
+                        "command": command,
+                        "description": f"User scheduled cron job: {command[:60]}"
+                    })
+        except Exception as e:
+            print("Error reading user crontab:", e)
+
+    # 2. System cron directories
+    cron_dirs = [
+        ("/etc/cron.hourly", "Hourly (@hourly)"),
+        ("/etc/cron.daily", "Daily (@daily)"),
+        ("/etc/cron.weekly", "Weekly (@weekly)"),
+        ("/etc/cron.monthly", "Monthly (@monthly)"),
+        ("/etc/cron.d", "Custom Cron Definition")
+    ]
+
+    for cdir_path, default_sched in cron_dirs:
+        cdir = Path(cdir_path)
+        if cdir.exists() and cdir.is_dir():
+            try:
+                for entry in cdir.iterdir():
+                    if entry.is_file() and not entry.name.startswith("."):
+                        if cdir_path == "/etc/cron.d":
+                            try:
+                                with open(entry, "r", errors="ignore") as f:
+                                    for l_idx, line in enumerate(f, start=1):
+                                        sline = line.strip()
+                                        if not sline or sline.startswith("#") or "=" in sline.split()[0]:
+                                            continue
+                                        parts = sline.split()
+                                        if len(parts) >= 7:
+                                            sched = " ".join(parts[:5])
+                                            user = parts[5]
+                                            cmd = " ".join(parts[6:])
+                                            cron_items.append({
+                                                "name": f"{entry.name} ({l_idx})",
+                                                "scope": "system",
+                                                "type": "cron",
+                                                "source": str(entry),
+                                                "schedule": sched,
+                                                "command": f"[{user}] {cmd}",
+                                                "description": f"System cron job in {entry.name}"
+                                            })
+                            except Exception:
+                                pass
+                        else:
+                            cron_items.append({
+                                "name": entry.name,
+                                "scope": "system",
+                                "type": "cron",
+                                "source": str(entry),
+                                "schedule": default_sched,
+                                "command": str(entry),
+                                "description": f"System maintenance script in {cdir.name}"
+                            })
+            except Exception as e:
+                print(f"Error reading cron directory {cdir}: {e}")
+
+    return cron_items
+
+def scan_failed_units():
+    """
+    Scans for failed/degraded units across system and user scopes.
+    """
+    failed_items = []
+    if not shutil.which("systemctl"):
+        return failed_items
+
+    # System scope
+    try:
+        p_sys = subprocess.run(
+            ["systemctl", "list-units", "--state=failed", "--output=json"],
+            capture_output=True, text=True, timeout=5
+        )
+        if p_sys.returncode == 0 and p_sys.stdout:
+            for item in json.loads(p_sys.stdout):
+                u = item.get("unit")
+                if u:
+                    failed_items.append({
+                        "name": u,
+                        "scope": "system",
+                        "active": item.get("active", "failed"),
+                        "sub": item.get("sub", "failed"),
+                        "description": item.get("description", "Failed system unit")
+                    })
+    except Exception as e:
+        print("Error checking failed system units:", e)
+
+    # User scope
+    try:
+        p_usr = subprocess.run(
+            ["systemctl", "--user", "list-units", "--state=failed", "--output=json"],
+            capture_output=True, text=True, timeout=5
+        )
+        if p_usr.returncode == 0 and p_usr.stdout:
+            for item in json.loads(p_usr.stdout):
+                u = item.get("unit")
+                if u:
+                    clean_name = u.replace("\\x2d", "-")
+                    failed_items.append({
+                        "name": clean_name,
+                        "scope": "user",
+                        "active": item.get("active", "failed"),
+                        "sub": item.get("sub", "failed"),
+                        "description": item.get("description", "Failed user unit")
+                    })
+    except Exception as e:
+        print("Error checking failed user units:", e)
+
+    return failed_items
+
+def scan_watchers_and_sockets():
+    """
+    Scans system and user path units (*.path) and socket units (*.socket).
+    """
+    watchers = []
+    if not shutil.which("systemctl"):
+        return watchers
+
+    for scope_flag, scope_name in [([], "system"), (["--user"], "user")]:
+        try:
+            p = subprocess.run(
+                ["systemctl"] + scope_flag + ["list-units", "--type=path,socket", "--all", "--output=json"],
+                capture_output=True, text=True, timeout=5
+            )
+            if p.returncode == 0 and p.stdout:
+                for item in json.loads(p.stdout):
+                    u = item.get("unit")
+                    if not u:
+                        continue
+                    clean_u = u.replace("\\x2d", "-")
+                    unit_type = "path" if clean_u.endswith(".path") else "socket"
+                    watchers.append({
+                        "name": clean_u,
+                        "scope": scope_name,
+                        "type": unit_type,
+                        "active_state": item.get("active", "active"),
+                        "sub_state": item.get("sub", "waiting"),
+                        "description": item.get("description", f"{unit_type.capitalize()} unit")
+                    })
+        except Exception as e:
+            print(f"Error scanning {scope_name} path/socket units:", e)
+
+    return watchers
+
+def scan_system_tasks():
+    """
+    Aggregates all system-level timers, cron jobs, watchers, and health statuses.
+    """
+    system_timers = scan_system_timers()
+    cron_jobs = scan_cron_jobs()
+    failed_units = scan_failed_units()
+    watchers = scan_watchers_and_sockets()
+
+    active_system_timers = sum(1 for t in system_timers if t.get("active_state") == "active")
+
+    stats = {
+        "total_system_timers": len(system_timers),
+        "active_system_timers": active_system_timers,
+        "total_cron_jobs": len(cron_jobs),
+        "total_watchers": len(watchers),
+        "failed_units_count": len(failed_units),
+        "is_healthy": len(failed_units) == 0
+    }
+
+    return {
+        "system_timers": system_timers,
+        "cron_jobs": cron_jobs,
+        "watchers": watchers,
+        "failed_units": failed_units,
+        "stats": stats,
+        "last_scan": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+def get_system_unit_cat(unit_name: str, scope: str = "system"):
+    """
+    Fetches the raw unit file definition via `systemctl cat`.
+    """
+    if not shutil.which("systemctl"):
+        return "systemctl is not available on this system."
+
+    cmd = ["systemctl"]
+    if scope == "user":
+        cmd.append("--user")
+    cmd.extend(["cat", unit_name])
+
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    if res.stdout:
+        return res.stdout
+    if res.stderr:
+        return f"Error reading unit: {res.stderr.strip()}"
+    return "No unit definition available."

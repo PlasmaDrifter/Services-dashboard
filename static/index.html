@@ -6,7 +6,7 @@
   <title>podman-systemd-dashboard</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="alternate icon" href="/static/favicon.ico">
-  <link rel="stylesheet" href="/static/style.css?v=1.1.9">
+  <link rel="stylesheet" href="/static/style.css?v=1.2.0">
 </head>
 <body>
   <div class="app-layout">
@@ -23,9 +23,32 @@
         </div>
         <div class="brand-text">
           <h1>podman-systemd-dashboard</h1>
-          <span class="brand-subtitle">Monitor, inspect, and configure background user services, timers, and containers</span>
+          <span class="brand-version" id="header-app-version">v1.2.0</span>
         </div>
       </div>
+
+      <!-- Center View Switcher -->
+      <div class="nav-center-views">
+        <div class="header-view-switcher">
+          <button class="header-view-btn active" id="view-tab-services" data-view="services" title="View User Services & Containers">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+            <span>User Services</span>
+          </button>
+          <button class="header-view-btn" id="view-tab-system" data-view="system" title="View System Tasks, Timers & Cron">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span>System Tasks</span>
+          </button>
+        </div>
+      </div>
+
       <div class="nav-controls">
         <a id="nav-appindex-link" href="http://localhost:8765" target="_blank" rel="noopener noreferrer" class="btn btn-appindex btn-sm" title="Open AppIndex" style="display: none;">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
@@ -72,8 +95,8 @@
     <main class="main-content">
       <!-- Unified Stats & Controls Toolbar -->
       <div class="toolbar-row">
-        <!-- Stats Badges -->
-        <div class="stats-group">
+        <!-- Stats Badges (Services View) -->
+        <div class="stats-group" id="services-stats-group">
           <div class="stat-card active" data-category="all" role="button" tabindex="0" aria-pressed="true" title="Show All Services">
             <span class="stat-label">Total Services</span>
             <span class="stat-value" id="stat-total-services">-</span>
@@ -93,6 +116,30 @@
           <div class="stat-card" data-category="timers" role="button" tabindex="0" aria-pressed="false" title="Filter Scheduled Timers">
             <span class="stat-label">Timers</span>
             <span class="stat-value text-blue" id="stat-timers">-</span>
+          </div>
+        </div>
+
+        <!-- Stats Badges (System Tasks View) -->
+        <div class="stats-group" id="system-stats-group" style="display: none;">
+          <div class="stat-card active" data-sys-category="all" role="button" tabindex="0" aria-pressed="true" title="Show All System Tasks">
+            <span class="stat-label">Total Tasks</span>
+            <span class="stat-value" id="stat-sys-total">-</span>
+          </div>
+          <div class="stat-card" data-sys-category="timers" role="button" tabindex="0" aria-pressed="false" title="Filter System Timers">
+            <span class="stat-label">Timers</span>
+            <span class="stat-value text-blue" id="stat-sys-timers">-</span>
+          </div>
+          <div class="stat-card" data-sys-category="cron" role="button" tabindex="0" aria-pressed="false" title="Filter Cron Jobs">
+            <span class="stat-label">Cron Jobs</span>
+            <span class="stat-value text-purple" id="stat-sys-cron">-</span>
+          </div>
+          <div class="stat-card" data-sys-category="watchers" role="button" tabindex="0" aria-pressed="false" title="Filter Sockets & Watchers">
+            <span class="stat-label">Sockets / Paths</span>
+            <span class="stat-value text-cyan" id="stat-sys-watchers">-</span>
+          </div>
+          <div class="stat-card" data-sys-category="failed" role="button" tabindex="0" aria-pressed="false" title="Filter Failed Units">
+            <span class="stat-label">Failed Units</span>
+            <span class="stat-value text-danger" id="stat-sys-failed">0</span>
           </div>
         </div>
 
@@ -462,6 +509,6 @@
   <!-- Toast Notification -->
   <div class="toast" id="toast"></div>
 
-  <script src="/static/app.js?v=1.1.9"></script>
+  <script src="/static/app.js?v=1.2.0"></script>
 </body>
 </html>

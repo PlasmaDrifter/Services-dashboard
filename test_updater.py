@@ -29,7 +29,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
             data = response.json()
             self.assertEqual(data.get("name"), "test.service")
             self.assertEqual(data.get("logs"), "Sep 25 12:00:00 service started")
-            mock_logs.assert_called_once_with("test.service", lines=50)
+            mock_logs.assert_called_once_with("test.service", lines=50, scope="user")
 
     def test_apply_update_endpoint(self):
         from unittest.mock import patch
@@ -233,6 +233,39 @@ class TestUpdaterEndpoints(unittest.TestCase):
                 verify_res = self.client.get("/api/settings")
                 self.assertEqual(verify_res.status_code, 200)
                 self.assertTrue(verify_res.json()["settings"]["show_appindex_link"])
+
+    def test_system_tasks_endpoints(self):
+        from unittest.mock import patch
+        fake_tasks = {
+            "system_timers": [{"name": "fstrim.timer", "scope": "system"}],
+            "cron_jobs": [{"name": "daily", "scope": "system"}],
+            "watchers": [{"name": "test.socket", "scope": "system"}],
+            "failed_units": [],
+            "stats": {"total_system_timers": 1, "is_healthy": True}
+        }
+        with patch("scanner.scan_system_tasks", return_value=fake_tasks), \
+             patch("scanner.get_system_unit_cat", return_value="[Unit]\nDescription=Test Timer"):
+            
+            # GET /api/system-tasks
+            res = self.client.get("/api/system-tasks")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(len(data["system_timers"]), 1)
+            self.assertTrue(data["stats"]["is_healthy"])
+
+            # POST /api/system-tasks/scan
+            scan_res = self.client.post("/api/system-tasks/scan")
+            self.assertEqual(scan_res.status_code, 200)
+            scan_data = scan_res.json()
+            self.assertEqual(scan_data["status"], "ok")
+            self.assertEqual(len(scan_data["data"]["system_timers"]), 1)
+
+            # GET /api/system-unit/{name}/cat
+            cat_res = self.client.get("/api/system-unit/fstrim.timer/cat?scope=system")
+            self.assertEqual(cat_res.status_code, 200)
+            cat_data = cat_res.json()
+            self.assertEqual(cat_data["name"], "fstrim.timer")
+            self.assertIn("Description=Test Timer", cat_data["content"])
 
 if __name__ == "__main__":
     unittest.main()

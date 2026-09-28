@@ -1,11 +1,15 @@
 let allServices = [];
 let allContainers = [];
+let currentActiveView = 'services'; // 'services' or 'system'
+let systemTasksData = null;
+let currentSysCategoryFilter = 'all'; // 'all', 'timers', 'cron', 'watchers', 'failed'
 let currentFilter = 'all'; // 'all', 'running', 'inactive'
 let currentCategoryFilter = 'all'; // 'all', 'web', 'containers', 'timers'
 let currentSearch = '';
 let currentViewMode = 'table';
 let currentEditingUnit = null;
 let currentLogsUnit = null;
+let currentLogsScope = 'user';
 let currentLastScanText = 'Last scan: --:--:--';
 
 const CATEGORY_ORDER = [
@@ -26,7 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function updateStatCardActiveState() {
-  document.querySelectorAll('.stat-card').forEach(card => {
+  document.querySelectorAll('#services-stats-group .stat-card').forEach(card => {
     const cat = card.dataset.category;
     let isActive = false;
 
@@ -60,26 +64,71 @@ function handleStatCardSelection(card) {
   if (isCurrentlyActive && cat !== 'all') {
     currentCategoryFilter = 'all';
     currentFilter = 'all';
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="all"]');
     if (allBtn) allBtn.classList.add('active');
   } else if (cat === 'all') {
     currentCategoryFilter = 'all';
     currentFilter = 'all';
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
+    const allBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="all"]');
     if (allBtn) allBtn.classList.add('active');
   } else if (cat === 'running') {
     currentFilter = 'running';
     currentCategoryFilter = 'all';
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    const runBtn = document.querySelector('.filter-btn[data-filter="running"]');
+    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
+    const runBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="running"]');
     if (runBtn) runBtn.classList.add('active');
   } else {
     currentCategoryFilter = cat;
   }
 
   updateStatCardActiveState();
+  renderContent();
+}
+
+function updateSystemStatCardActiveState() {
+  document.querySelectorAll('#system-stats-group .stat-card').forEach(card => {
+    const cat = card.dataset.sysCategory;
+    if (cat === currentSysCategoryFilter) {
+      card.classList.add('active');
+      card.setAttribute('aria-pressed', 'true');
+    } else {
+      card.classList.remove('active');
+      card.setAttribute('aria-pressed', 'false');
+    }
+  });
+}
+
+function handleSystemStatCardSelection(card) {
+  const cat = card.dataset.sysCategory;
+  if (currentSysCategoryFilter === cat && cat !== 'all') {
+    currentSysCategoryFilter = 'all';
+  } else {
+    currentSysCategoryFilter = cat;
+  }
+  updateSystemStatCardActiveState();
+  renderContent();
+}
+
+function switchView(viewName) {
+  currentActiveView = viewName;
+  const servicesBtn = document.getElementById('view-tab-services');
+  const systemBtn = document.getElementById('view-tab-system');
+  const servicesStats = document.getElementById('services-stats-group');
+  const systemStats = document.getElementById('system-stats-group');
+
+  if (viewName === 'services') {
+    if (servicesBtn) servicesBtn.classList.add('active');
+    if (systemBtn) systemBtn.classList.remove('active');
+    if (servicesStats) servicesStats.style.display = 'flex';
+    if (systemStats) systemStats.style.display = 'none';
+  } else {
+    if (systemBtn) systemBtn.classList.add('active');
+    if (servicesBtn) servicesBtn.classList.remove('active');
+    if (servicesStats) servicesStats.style.display = 'none';
+    if (systemStats) systemStats.style.display = 'flex';
+  }
   renderContent();
 }
 
@@ -95,9 +144,9 @@ function initEventListeners() {
   });
 
   // Filter buttons (Running / Stopped / All)
-  document.querySelectorAll('.filter-btn').forEach(btn => {
+  document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentFilter = btn.dataset.filter;
       updateStatCardActiveState();
@@ -105,13 +154,32 @@ function initEventListeners() {
     });
   });
 
-  // Stat cards filter click & keyboard accessibility
-  document.querySelectorAll('.stat-card').forEach(card => {
+  // View Switcher (Option B: Services vs System Tasks)
+  const servicesViewBtn = document.getElementById('view-tab-services');
+  const systemViewBtn = document.getElementById('view-tab-system');
+  if (servicesViewBtn && systemViewBtn) {
+    servicesViewBtn.addEventListener('click', () => switchView('services'));
+    systemViewBtn.addEventListener('click', () => switchView('system'));
+  }
+
+  // Stat cards filter click & keyboard accessibility (Services View)
+  document.querySelectorAll('#services-stats-group .stat-card').forEach(card => {
     card.addEventListener('click', () => handleStatCardSelection(card));
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         handleStatCardSelection(card);
+      }
+    });
+  });
+
+  // Stat cards filter click & keyboard accessibility (System Tasks View)
+  document.querySelectorAll('#system-stats-group .stat-card').forEach(card => {
+    card.addEventListener('click', () => handleSystemStatCardSelection(card));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleSystemStatCardSelection(card);
       }
     });
   });
@@ -169,13 +237,34 @@ function initEventListeners() {
 
 async function loadData() {
   try {
-    const res = await fetch('/api/services');
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const data = await res.json();
-    applyData(data);
+    const [resServices, resSystem] = await Promise.all([
+      fetch('/api/services'),
+      fetch('/api/system-tasks')
+    ]);
+
+    if (resServices.ok) {
+      const data = await resServices.json();
+      applyData(data);
+    }
+    if (resSystem.ok) {
+      const sysData = await resSystem.json();
+      applySystemData(sysData);
+    }
   } catch (err) {
     console.error('Failed to load services data:', err);
     showToast('Failed to fetch services data', 'error');
+  }
+}
+
+async function loadSystemData() {
+  try {
+    const res = await fetch('/api/system-tasks');
+    if (res.ok) {
+      const data = await res.json();
+      applySystemData(data);
+    }
+  } catch (err) {
+    console.error('Failed to load system tasks:', err);
   }
 }
 
@@ -189,10 +278,19 @@ async function handleManualScan() {
   btnText.textContent = 'Scanning...';
 
   try {
-    const res = await fetch('/api/scan', { method: 'POST' });
-    if (!res.ok) throw new Error(`Scan failed with status ${res.status}`);
-    const result = await res.json();
-    applyData(result.data);
+    const [resScan, resSysScan] = await Promise.all([
+      fetch('/api/scan', { method: 'POST' }),
+      fetch('/api/system-tasks/scan', { method: 'POST' })
+    ]);
+
+    if (resScan.ok) {
+      const result = await resScan.json();
+      applyData(result.data);
+    }
+    if (resSysScan.ok) {
+      const sysResult = await resSysScan.json();
+      applySystemData(sysResult.data);
+    }
     showToast('Scan completed successfully!');
   } catch (err) {
     console.error('Manual scan error:', err);
@@ -201,6 +299,52 @@ async function handleManualScan() {
     btn.disabled = false;
     spinIcon.classList.remove('spinning');
     btnText.textContent = 'Rescan';
+  }
+}
+
+function applySystemData(data) {
+  if (!data) return;
+  systemTasksData = data;
+  const stats = data.stats || {};
+
+  const totalSys = (stats.total_system_timers || 0) + (stats.total_cron_jobs || 0) + (stats.total_watchers || 0);
+  const badgeCount = document.getElementById('view-tab-system-count');
+  if (badgeCount) {
+    badgeCount.textContent = totalSys > 0 ? totalSys : '0';
+    if (stats.failed_units_count && stats.failed_units_count > 0) {
+      badgeCount.classList.add('badge-failed');
+      badgeCount.title = `${stats.failed_units_count} failed unit(s) detected`;
+    } else {
+      badgeCount.classList.remove('badge-failed');
+      badgeCount.title = '';
+    }
+  }
+
+  const statTotal = document.getElementById('stat-sys-total');
+  if (statTotal) statTotal.textContent = totalSys;
+
+  const statTimers = document.getElementById('stat-sys-timers');
+  if (statTimers) statTimers.textContent = stats.total_system_timers || 0;
+
+  const statCron = document.getElementById('stat-sys-cron');
+  if (statCron) statCron.textContent = stats.total_cron_jobs || 0;
+
+  const statWatchers = document.getElementById('stat-sys-watchers');
+  if (statWatchers) statWatchers.textContent = stats.total_watchers || 0;
+
+  const statFailed = document.getElementById('stat-sys-failed');
+  if (statFailed) {
+    const failedCount = stats.failed_units_count || 0;
+    statFailed.textContent = failedCount;
+    if (failedCount > 0) {
+      statFailed.className = 'stat-value text-danger';
+    } else {
+      statFailed.className = 'stat-value text-success';
+    }
+  }
+
+  if (currentActiveView === 'system') {
+    renderContent();
   }
 }
 
@@ -337,7 +481,13 @@ function getUnifiedItems() {
 
 function renderContent() {
   const container = document.getElementById('categories-container');
+  if (!container) return;
   container.innerHTML = '';
+
+  if (currentActiveView === 'system') {
+    renderSystemView();
+    return;
+  }
 
   updateStatCardActiveState();
 
@@ -349,7 +499,7 @@ function renderContent() {
     if (isFiltered) {
       resetBtn = `<br><button class="btn btn-secondary btn-sm" id="btn-empty-clear-category" style="margin-top: 10px;">Show All Categories</button>`;
     }
-    container.innerHTML = `<div class="empty-state">No matching services or timers found.${resetBtn}</div>`;
+    container.innerHTML = `<div class="empty-state">No matching user services or timers found.${resetBtn}</div>`;
     const emptyClear = document.getElementById('btn-empty-clear-category');
     if (emptyClear) {
       emptyClear.addEventListener('click', () => {
@@ -520,6 +670,382 @@ function renderTableHTML(items) {
   `;
 }
 
+function renderSystemView() {
+  const container = document.getElementById('categories-container');
+  if (!container) return;
+
+  updateSystemStatCardActiveState();
+
+  if (!systemTasksData) {
+    container.innerHTML = '<div class="loading-state">Loading system tasks...</div>';
+    return;
+  }
+
+  const { system_timers = [], cron_jobs = [], watchers = [], failed_units = [] } = systemTasksData;
+
+  // Filter items based on currentSearch and currentFilter
+  const filterBySearchAndStatus = (items, type) => {
+    return items.filter(item => {
+      // Status filter
+      if (currentFilter === 'running') {
+        if (type === 'failed') return false; // failed units are never running
+        if (type !== 'cron') {
+          const state = (item.active_state || item.active || '').toLowerCase();
+          const sub = (item.sub_state || item.sub || '').toLowerCase();
+          const isRunning = state === 'active' || state === 'running' || sub === 'running' || sub === 'listening' || sub === 'waiting';
+          if (!isRunning) return false;
+        }
+      } else if (currentFilter === 'inactive') {
+        if (type === 'cron') return false; // cron jobs are not inactive
+        if (type !== 'failed') {
+          const state = (item.active_state || item.active || '').toLowerCase();
+          const sub = (item.sub_state || item.sub || '').toLowerCase();
+          const isInactive = state === 'inactive' || state === 'failed' || sub === 'dead' || sub === 'failed';
+          if (!isInactive) return false;
+        }
+      }
+
+      // Search filter
+      if (currentSearch) {
+        const nameMatch = (item.name || '').toLowerCase().includes(currentSearch);
+        const descMatch = (item.description || '').toLowerCase().includes(currentSearch);
+        const actMatch = (item.activates || '').toLowerCase().includes(currentSearch);
+        const cmdMatch = (item.command || '').toLowerCase().includes(currentSearch);
+        const schedMatch = (item.schedule || '').toLowerCase().includes(currentSearch);
+        const srcMatch = (item.source || '').toLowerCase().includes(currentSearch);
+        return nameMatch || descMatch || actMatch || cmdMatch || schedMatch || srcMatch;
+      }
+      return true;
+    });
+  };
+
+  const filteredFailed = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'failed') 
+    ? filterBySearchAndStatus(failed_units, 'failed') : [];
+  const filteredTimers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'timers') 
+    ? filterBySearchAndStatus(system_timers, 'timer') : [];
+  const filteredCron = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'cron') 
+    ? filterBySearchAndStatus(cron_jobs, 'cron') : [];
+  const filteredWatchers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'watchers') 
+    ? filterBySearchAndStatus(watchers, 'watcher') : [];
+
+  const totalFiltered = filteredFailed.length + filteredTimers.length + filteredCron.length + filteredWatchers.length;
+
+  if (totalFiltered === 0) {
+    let resetBtn = '';
+    if (currentSysCategoryFilter !== 'all') {
+      resetBtn = `<br><button class="btn btn-secondary btn-sm" id="btn-empty-clear-sys-cat" style="margin-top: 10px;">Show All System Tasks</button>`;
+    }
+    container.innerHTML = `<div class="empty-state">No matching system tasks, timers, or watchers found.${resetBtn}</div>`;
+    const clearBtn = document.getElementById('btn-empty-clear-sys-cat');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        currentSysCategoryFilter = 'all';
+        updateSystemStatCardActiveState();
+        renderContent();
+      });
+    }
+    return;
+  }
+
+  let isFirst = true;
+
+  // 1. Failed / Degraded Units Section
+  if (filteredFailed.length > 0) {
+    const sec = createSystemSection("Failed / Degraded Units", filteredFailed.length, 'danger', isFirst);
+    isFirst = false;
+    sec.appendChild(renderFailedUnitsTable(filteredFailed));
+    container.appendChild(sec);
+  }
+
+  // 2. System Timers Section
+  if (filteredTimers.length > 0) {
+    const sec = createSystemSection("System Timers", filteredTimers.length, '', isFirst);
+    isFirst = false;
+    sec.appendChild(renderSystemTimersTable(filteredTimers));
+    container.appendChild(sec);
+  }
+
+  // 3. Cron Jobs Section
+  if (filteredCron.length > 0) {
+    const sec = createSystemSection("Cron Jobs & Scheduled Scripts", filteredCron.length, '', isFirst);
+    isFirst = false;
+    sec.appendChild(renderCronJobsTable(filteredCron));
+    container.appendChild(sec);
+  }
+
+  // 4. Watchers & Sockets Section
+  if (filteredWatchers.length > 0) {
+    const sec = createSystemSection("Sockets & Path Watchers", filteredWatchers.length, '', isFirst);
+    isFirst = false;
+    sec.appendChild(renderWatchersTable(filteredWatchers));
+    container.appendChild(sec);
+  }
+}
+
+function createSystemSection(title, count, badgeTheme = '', isFirst = false) {
+  const sec = document.createElement('section');
+  sec.className = 'category-section';
+
+  const isFiltered = (currentSysCategoryFilter !== 'all');
+  if (isFiltered) {
+    sec.classList.add('is-filtered');
+  }
+
+  const badgeClass = 'category-badge';
+  const badgeStyle = badgeTheme === 'danger' ? 'background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3);' : '';
+
+  let filterPillHtml = '';
+  if (isFiltered) {
+    filterPillHtml = `
+      <button class="category-filter-pill" id="btn-clear-sys-pill" title="Clear filter and show all system tasks">
+        <span>Filtered</span>
+        <span class="pill-close">&times;</span>
+      </button>
+    `;
+  }
+
+  let lastScanHtml = '';
+  if (isFirst) {
+    const scanTime = (systemTasksData && systemTasksData.last_scan) ? `Last scan: ${systemTasksData.last_scan}` : currentLastScanText;
+    lastScanHtml = `<span class="last-scan-label" id="last-scan-time">${escapeHtml(scanTime)}</span>`;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'category-header';
+  header.innerHTML = `
+    <div class="category-title-area">
+      <h2 class="category-title">${escapeHtml(title)}</h2>
+      <span class="${badgeClass}" style="${badgeStyle}">${count}</span>
+      ${filterPillHtml}
+    </div>
+    ${lastScanHtml}
+  `;
+
+  const clearBtn = header.querySelector('#btn-clear-sys-pill');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      currentSysCategoryFilter = 'all';
+      updateSystemStatCardActiveState();
+      renderContent();
+    });
+  }
+
+  sec.appendChild(header);
+  return sec;
+}
+
+function renderSystemTimersTable(items) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-container';
+
+  let rows = '';
+  items.forEach(item => {
+    const isWaiting = item.sub_state === 'waiting' || item.active_state === 'active';
+    const statusClass = isWaiting ? 'active' : 'inactive';
+    const statusLabel = escapeHtml(item.sub_state || item.active_state || 'waiting');
+    const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+
+    const targetService = item.activates ? `<div class="table-service-file">Activates: <code>${escapeHtml(item.activates)}</code></div>` : '';
+    const nextRun = item.next_str ? `<span style="color:var(--blue); font-size:0.8rem;">${escapeHtml(item.next_str)}</span>${item.left_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.left_str)}</div>` : ''}` : '-';
+    const lastRun = item.last_str ? `<span style="font-size:0.8rem; color:var(--text-main);">${escapeHtml(item.last_str)}</span>${item.passed_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.passed_str)}</div>` : ''}` : 'Never';
+
+    rows += `
+      <tr>
+        <td style="width: 130px;">
+          <span class="status-badge ${statusClass}">
+            <span class="status-dot"></span>
+            ${statusLabel}
+          </span>
+        </td>
+        <td>
+          <div class="table-service-name font-mono">${escapeHtml(item.name)}</div>
+          ${targetService}
+        </td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 170px;">${nextRun}</td>
+        <td style="width: 170px;">${lastRun}</td>
+        <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
+        <td style="width: 160px; text-align: right;">
+          <div class="table-actions">
+            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.activates || item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
+            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+
+  wrapper.innerHTML = `
+    <table class="services-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Timer & Target Unit</th>
+          <th>Scope</th>
+          <th>Next Run</th>
+          <th>Last Run</th>
+          <th>Description</th>
+          <th style="text-align: right; width: 160px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  return wrapper;
+}
+
+function renderCronJobsTable(items) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-container';
+
+  let rows = '';
+  items.forEach(item => {
+    const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const sourceText = item.source ? `<div class="table-service-file">${escapeHtml(item.source)}</div>` : '';
+
+    rows += `
+      <tr>
+        <td style="width: 110px;">
+          <span class="status-badge active">
+            <span class="status-dot"></span>
+            Active
+          </span>
+        </td>
+        <td>
+          <div class="table-service-name font-mono">${escapeHtml(item.name)}</div>
+          ${sourceText}
+        </td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 140px;"><code class="badge badge-primary font-mono" style="font-size:0.8rem;">${escapeHtml(item.schedule || '-')}</code></td>
+        <td><code class="system-cmd-code">${escapeHtml(item.command || '-')}</code></td>
+        <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
+      </tr>
+    `;
+  });
+
+  wrapper.innerHTML = `
+    <table class="services-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Job Name & Source</th>
+          <th>Scope</th>
+          <th>Schedule</th>
+          <th>Command / Script</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  return wrapper;
+}
+
+function renderWatchersTable(items) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-container';
+
+  let rows = '';
+  items.forEach(item => {
+    const isActive = item.active_state === 'active';
+    const statusClass = isActive ? 'active' : 'inactive';
+    const statusLabel = escapeHtml(item.sub_state || item.active_state || 'active');
+    const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const typeLabel = (item.type || 'watcher').toUpperCase();
+
+    rows += `
+      <tr>
+        <td style="width: 130px;">
+          <span class="status-badge ${statusClass}">
+            <span class="status-dot"></span>
+            ${statusLabel}
+          </span>
+        </td>
+        <td>
+          <div class="table-service-name font-mono">${escapeHtml(item.name)}</div>
+        </td>
+        <td style="width: 90px;"><span class="engine-badge engine-podman">${escapeHtml(typeLabel)}</span></td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
+        <td style="width: 160px; text-align: right;">
+          <div class="table-actions">
+            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
+            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+
+  wrapper.innerHTML = `
+    <table class="services-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Unit Name</th>
+          <th>Type</th>
+          <th>Scope</th>
+          <th>Description</th>
+          <th style="text-align: right; width: 160px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  return wrapper;
+}
+
+function renderFailedUnitsTable(items) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-container';
+
+  let rows = '';
+  items.forEach(item => {
+    const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const subLabel = escapeHtml(item.sub || item.active || 'failed');
+
+    rows += `
+      <tr>
+        <td style="width: 130px;">
+          <span class="status-badge inactive" style="color:var(--danger); border-color:rgba(239, 68, 68, 0.4);">
+            <span class="status-dot" style="background:var(--danger); box-shadow:0 0 6px var(--danger);"></span>
+            FAILED
+          </span>
+        </td>
+        <td>
+          <div class="table-service-name font-mono" style="color:var(--danger); font-weight:600;">${escapeHtml(item.name)}</div>
+        </td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 100px;"><span class="file-path-badge" style="color:var(--danger);">${subLabel}</span></td>
+        <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
+        <td style="width: 160px; text-align: right;">
+          <div class="table-actions">
+            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
+            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+
+  wrapper.innerHTML = `
+    <table class="services-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Failed Unit Name</th>
+          <th>Scope</th>
+          <th>Sub State</th>
+          <th>Description</th>
+          <th style="text-align: right; width: 160px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  return wrapper;
+}
+
 function createCardElement(item) {
   const card = document.createElement('div');
   card.className = 'service-card';
@@ -664,6 +1190,51 @@ async function openEditorModal(unitName) {
 function closeEditorModal() {
   document.getElementById('editor-modal').classList.remove('open');
   currentEditingUnit = null;
+
+  // Reset editor modal controls in case it was opened in inspect mode
+  const textarea = document.getElementById('editor-textarea');
+  const saveBtn = document.getElementById('btn-save-editor');
+  const saveRestartBtn = document.getElementById('btn-save-restart-editor');
+  const cancelBtn = document.getElementById('btn-cancel-editor');
+
+  if (textarea) textarea.readOnly = false;
+  if (saveBtn) saveBtn.style.display = '';
+  if (saveRestartBtn) saveRestartBtn.style.display = '';
+  if (cancelBtn) cancelBtn.textContent = 'Cancel';
+}
+
+async function openInspectModal(unitName, scope = 'system') {
+  currentEditingUnit = null;
+  const modal = document.getElementById('editor-modal');
+  const title = document.getElementById('editor-title');
+  const pathBadge = document.getElementById('editor-file-path');
+  const textarea = document.getElementById('editor-textarea');
+  const banner = document.getElementById('editor-banner');
+  const saveBtn = document.getElementById('btn-save-editor');
+  const saveRestartBtn = document.getElementById('btn-save-restart-editor');
+  const cancelBtn = document.getElementById('btn-cancel-editor');
+
+  banner.className = 'banner hidden';
+  title.textContent = `Inspect ${unitName}`;
+  pathBadge.textContent = `systemctl cat (${scope} scope)`;
+  textarea.value = 'Loading unit definition via systemctl cat...';
+  textarea.readOnly = true;
+
+  if (saveBtn) saveBtn.style.display = 'none';
+  if (saveRestartBtn) saveRestartBtn.style.display = 'none';
+  if (cancelBtn) cancelBtn.textContent = 'Close';
+
+  modal.classList.add('open');
+
+  try {
+    const res = await fetch(`/api/system-unit/${encodeURIComponent(unitName)}/cat?scope=${encodeURIComponent(scope)}`);
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const data = await res.json();
+    textarea.value = data.content || 'No definition returned.';
+  } catch (err) {
+    console.error('Error fetching unit inspection:', err);
+    textarea.value = `Error loading unit definition: ${err.message}`;
+  }
 }
 
 async function saveUnitFile(restartAfter) {
@@ -710,15 +1281,16 @@ async function saveUnitFile(restartAfter) {
 }
 
 // Logs Modal
-async function openLogsModal(unitName) {
+async function openLogsModal(unitName, scope = 'user') {
   currentLogsUnit = unitName;
+  currentLogsScope = scope;
   const modal = document.getElementById('logs-modal');
   const title = document.getElementById('logs-title');
   const unitBadge = document.getElementById('logs-unit-name');
   const terminal = document.getElementById('logs-terminal');
 
   title.textContent = `Journal Logs: ${unitName}`;
-  unitBadge.textContent = unitName;
+  unitBadge.textContent = `${unitName} (${scope})`;
   terminal.textContent = 'Loading logs...';
   modal.classList.add('open');
 
@@ -734,7 +1306,7 @@ async function refreshLogs() {
   if (!currentLogsUnit) return;
   const terminal = document.getElementById('logs-terminal');
   try {
-    const res = await fetch(`/api/service/${currentLogsUnit}/logs?lines=100`);
+    const res = await fetch(`/api/service/${encodeURIComponent(currentLogsUnit)}/logs?lines=100&scope=${encodeURIComponent(currentLogsScope)}`);
     if (!res.ok) throw new Error('Could not fetch logs');
     const data = await res.json();
     terminal.textContent = data.logs || 'No journal log entries found for this service.';
@@ -941,7 +1513,7 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.1.9";
+let cachedAppVersion = "v1.2.0";
 let cachedGithubRepo = "PlasmaDrifter/podman-systemd-dashboard";
 
 function loadSavedSettings() {
@@ -973,7 +1545,13 @@ function loadSavedSettings() {
     .then((r) => r.json())
     .then((data) => {
       if (data && data.status === "ok") {
-        if (data.app_version) cachedAppVersion = data.app_version;
+        if (data.app_version) {
+          cachedAppVersion = data.app_version;
+          const headerVer = document.getElementById("header-app-version");
+          if (headerVer) {
+            headerVer.textContent = cachedAppVersion.startsWith("v") ? cachedAppVersion : `v${cachedAppVersion}`;
+          }
+        }
         if (data.github_repo) cachedGithubRepo = data.github_repo;
         const s = data.settings || {};
 
@@ -1196,10 +1774,15 @@ function renderUpdateUI(info) {
   const bannerLink = document.getElementById("update-banner-link");
   const btnSettings = document.getElementById("btn-settings");
 
+  const headerVer = document.getElementById("header-app-version");
   const settingsVer = document.getElementById("settings-app-version");
-  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.1.5");
+  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.0");
+  const formattedVer = curVer.startsWith("v") ? curVer : `v${curVer}`;
   if (settingsVer) {
-    settingsVer.textContent = curVer.startsWith("v") ? curVer : `v${curVer}`;
+    settingsVer.textContent = formattedVer;
+  }
+  if (headerVer) {
+    headerVer.textContent = formattedVer;
   }
 
   if (!userSettings.checkForUpdates) {
@@ -1222,7 +1805,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.9'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
     }
 
     if (btnSettings) {
@@ -1277,7 +1860,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/podman-systemd-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.1.9'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");
