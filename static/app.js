@@ -1513,7 +1513,7 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.2.0";
+let cachedAppVersion = "v1.2.1";
 let cachedGithubRepo = "PlasmaDrifter/Services-dashboard";
 
 function loadSavedSettings() {
@@ -1776,7 +1776,7 @@ function renderUpdateUI(info) {
 
   const headerVer = document.getElementById("header-app-version");
   const settingsVer = document.getElementById("settings-app-version");
-  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.0");
+  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.1");
   const formattedVer = curVer.startsWith("v") ? curVer : `v${curVer}`;
   if (settingsVer) {
     settingsVer.textContent = formattedVer;
@@ -1805,7 +1805,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.1'})`;
     }
 
     if (btnSettings) {
@@ -1860,7 +1860,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.0'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.1'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");

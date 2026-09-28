@@ -35,7 +35,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
         from unittest.mock import patch
         with patch("app.apply_self_update") as mock_apply, \
              patch("app.trigger_server_restart") as mock_restart:
-            mock_apply.return_value = {"mode": "git", "message": "Updated via git pull", "tag": "v1.2.0"}
+            mock_apply.return_value = {"mode": "git", "message": "Updated via git pull", "tag": "v1.2.1"}
             response = self.client.post("/api/apply-update")
             self.assertEqual(response.status_code, 200)
             data = response.json()
@@ -54,7 +54,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
             tar_path = os.path.join(temp_dir, "sample.tar.gz")
             with tarfile.open(tar_path, "w:gz") as tar:
                 content = b"print('updated')\n"
-                info = tarfile.TarInfo(name="Services-dashboard-1.2.0/test_file.py")
+                info = tarfile.TarInfo(name="Services-dashboard-1.2.1/test_file.py")
                 info.size = len(content)
                 tar.addfile(info, io.BytesIO(content))
 
@@ -66,7 +66,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
                 else:
                     tar.extractall(path=dest_dir)
 
-            extracted_file = os.path.join(dest_dir, "Services-dashboard-1.2.0", "test_file.py")
+            extracted_file = os.path.join(dest_dir, "Services-dashboard-1.2.1", "test_file.py")
             self.assertTrue(os.path.isfile(extracted_file))
             with open(extracted_file, "r") as f:
                 self.assertIn("updated", f.read())
@@ -126,7 +126,7 @@ class TestUpdaterEndpoints(unittest.TestCase):
     def test_version_comparison(self):
         from app import is_newer_version
         self.assertTrue(is_newer_version("v1.1.5", "v1.1.4"))
-        self.assertTrue(is_newer_version("1.2.0", "1.1.9"))
+        self.assertTrue(is_newer_version("1.2.1", "1.2.0"))
         self.assertFalse(is_newer_version("v1.1.5", "v1.1.5"))
         self.assertFalse(is_newer_version("v1.1.4", "v1.1.5"))
         self.assertFalse(is_newer_version("1.0.0", "1.1.0"))
