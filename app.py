@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.1.8"
+APP_VERSION = "v1.1.9"
 GITHUB_REPO = "PlasmaDrifter/podman-systemd-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -187,12 +187,43 @@ def apply_self_update(target_tag: str = "") -> dict:
             time.sleep(1.0)
             return _finalize_update("git-dev", f"Updated to {new_ver} (development mode)", new_ver)
 
+        # 1. Attempt fast-forward pull first
         cmd = ["git", "pull", "--ff-only"]
         res = subprocess.run(cmd, cwd=base_dir_str, capture_output=True, text=True)
-        if res.returncode != 0:
-            err_msg = res.stderr.strip() or res.stdout.strip()
-            raise RuntimeError(f"Git pull failed: {err_msg}")
-        return _finalize_update("git", "Updated via git pull", target_tag or "latest")
+        if res.returncode == 0:
+            return _finalize_update("git", "Updated via git pull", target_tag or "latest")
+
+        # 2. Fast-forward failed (e.g. upstream branch diverged, squashed, amended, or force-pushed).
+        # Since working tree was confirmed clean above, safely fetch and reset to remote branch.
+        fetch_res = subprocess.run(
+            ["git", "fetch", "--prune", "--tags", "origin"],
+            cwd=base_dir_str,
+            capture_output=True,
+            text=True
+        )
+        if fetch_res.returncode != 0:
+            err_msg = fetch_res.stderr.strip() or fetch_res.stdout.strip()
+            raise RuntimeError(f"Git fetch failed: {err_msg}")
+
+        branch_res = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=base_dir_str,
+            capture_output=True,
+            text=True
+        )
+        current_branch = branch_res.stdout.strip() or "main"
+
+        reset_res = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{current_branch}"],
+            cwd=base_dir_str,
+            capture_output=True,
+            text=True
+        )
+        if reset_res.returncode != 0:
+            err_msg = reset_res.stderr.strip() or reset_res.stdout.strip()
+            raise RuntimeError(f"Git reset to origin/{current_branch} failed: {err_msg}")
+
+        return _finalize_update("git-reset", f"Synchronized via reset to origin/{current_branch}", target_tag or "latest")
 
     if not target_tag:
         info = check_github_update(force=True)

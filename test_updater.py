@@ -178,6 +178,33 @@ class TestUpdaterEndpoints(unittest.TestCase):
             saved = mock_set_cache.call_args[0][0]
             self.assertFalse(saved["has_update"])
 
+    def test_apply_update_git_diverged_fallback(self):
+        from unittest.mock import patch, MagicMock
+        import app
+
+        # Call sequence:
+        # 1. git status --porcelain (clean)
+        # 2. git pull --ff-only (fails with code 128 - diverged)
+        # 3. git fetch --prune --tags origin (succeeds)
+        # 4. git rev-parse --abbrev-ref HEAD (returns "main")
+        # 5. git reset --hard origin/main (succeeds)
+        p_status = MagicMock(returncode=0, stdout="", stderr="")
+        p_pull = MagicMock(returncode=128, stdout="", stderr="fatal: Not possible to fast-forward, aborting.")
+        p_fetch = MagicMock(returncode=0, stdout="", stderr="")
+        p_branch = MagicMock(returncode=0, stdout="main\n", stderr="")
+        p_reset = MagicMock(returncode=0, stdout="HEAD is now at 1234abc", stderr="")
+
+        with patch("subprocess.run", side_effect=[p_status, p_pull, p_fetch, p_branch, p_reset]) as mock_run, \
+             patch("scanner.set_cached_update") as mock_set_cache, \
+             patch("os.path.isdir", return_value=True):
+            app.UPDATE_CACHE["has_update"] = True
+            result = app.apply_self_update(target_tag="v1.1.9")
+
+            self.assertEqual(result["mode"], "git-reset")
+            self.assertIn("Synchronized via reset to origin/main", result["message"])
+            self.assertFalse(app.UPDATE_CACHE["has_update"])
+            self.assertEqual(mock_run.call_count, 5)
+
     def test_settings_endpoints(self):
         import tempfile
         import scanner
