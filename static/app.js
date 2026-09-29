@@ -11,6 +11,8 @@ let currentEditingUnit = null;
 let currentLogsUnit = null;
 let currentLogsScope = 'user';
 let currentLastScanText = 'Last scan: --:--:--';
+let lastDataLoadTime = 0;
+let activatingPollTimer = null;
 
 const CATEGORY_ORDER = [
   "Web Apps & Dashboards",
@@ -233,9 +235,25 @@ function initEventListeners() {
       this.selectionStart = this.selectionEnd = start + 4;
     }
   });
+
+  // Automatically refresh when switching back to tab if more than 10s passed
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (Date.now() - lastDataLoadTime > 10000) {
+        loadData();
+      }
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    if (Date.now() - lastDataLoadTime > 10000) {
+      loadData();
+    }
+  });
 }
 
 async function loadData() {
+  lastDataLoadTime = Date.now();
   try {
     const [resServices, resSystem] = await Promise.all([
       fetch('/api/services'),
@@ -379,6 +397,25 @@ function applyData(data) {
   const scanEl = document.getElementById('last-scan-time');
   if (scanEl) {
     scanEl.textContent = currentLastScanText;
+  }
+
+  // If any service is currently in a transient state (activating/deactivating), auto-refresh in 2.5s
+  const hasTransient = allServices.some(s =>
+    s.active_state === 'activating' ||
+    s.active_state === 'deactivating' ||
+    s.sub_state === 'start-post' ||
+    s.sub_state === 'start-pre'
+  );
+  if (hasTransient) {
+    if (!activatingPollTimer) {
+      activatingPollTimer = setTimeout(() => {
+        activatingPollTimer = null;
+        loadData();
+      }, 2500);
+    }
+  } else if (activatingPollTimer) {
+    clearTimeout(activatingPollTimer);
+    activatingPollTimer = null;
   }
 }
 

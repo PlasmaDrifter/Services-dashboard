@@ -267,6 +267,73 @@ class TestUpdaterEndpoints(unittest.TestCase):
             self.assertEqual(cat_data["name"], "fstrim.timer")
             self.assertIn("Description=Test Timer", cat_data["content"])
 
+    def test_has_transient_states(self):
+        from app import has_transient_states
+
+        self.assertFalse(has_transient_states({}))
+        self.assertFalse(has_transient_states({"services": [{"active_state": "active", "sub_state": "running"}]}))
+        self.assertFalse(has_transient_states({"services": [{"active_state": "inactive", "sub_state": "dead"}]}))
+
+        # Activating / start-post transient states
+        self.assertTrue(has_transient_states({"services": [{"active_state": "activating", "sub_state": "start-post"}]}))
+        self.assertTrue(has_transient_states({"services": [{"active_state": "activating", "sub_state": "running"}]}))
+        self.assertTrue(has_transient_states({"services": [{"active_state": "deactivating", "sub_state": "stop-sigterm"}]}))
+        self.assertTrue(has_transient_states({"services": [{"active_state": "active", "sub_state": "start-pre"}]}))
+
+    def test_services_cache_ttl_and_transient_expiration(self):
+        from unittest.mock import patch
+        import app
+        import time
+
+        data_active = {"services": [{"name": "flame.service", "active_state": "active", "sub_state": "running"}]}
+        data_activating = {"services": [{"name": "flame.service", "active_state": "activating", "sub_state": "start-post"}]}
+
+        with patch("scanner.scan_all") as mock_scan:
+            mock_scan.return_value = data_active
+
+            # Initial call caches data
+            with app.cache_lock:
+                app.cached_data = None
+                app.last_services_scan = 0.0
+
+            res1 = self.client.get("/api/services")
+            self.assertEqual(res1.status_code, 200)
+            self.assertEqual(mock_scan.call_count, 1)
+
+            # Subsequent call within TTL serves cache without calling scan_all again
+            res2 = self.client.get("/api/services")
+            self.assertEqual(res2.status_code, 200)
+            self.assertEqual(mock_scan.call_count, 1)
+
+            # Expire normal TTL
+            with app.cache_lock:
+                app.last_services_scan = time.time() - 15.0
+
+            res3 = self.client.get("/api/services")
+            self.assertEqual(res3.status_code, 200)
+            self.assertEqual(mock_scan.call_count, 2)
+
+            # If service is activating, transient TTL is shorter (2s)
+            mock_scan.return_value = data_activating
+            with app.cache_lock:
+                app.last_services_scan = time.time() - 15.0
+
+            res4 = self.client.get("/api/services")
+            self.assertEqual(mock_scan.call_count, 3)
+
+            # 1 second later: still within transient TTL (2.0s)
+            with app.cache_lock:
+                app.last_services_scan = time.time() - 1.0
+            res5 = self.client.get("/api/services")
+            self.assertEqual(mock_scan.call_count, 3)
+
+            # 3 seconds later: transient TTL expired, triggers automatic rescan
+            with app.cache_lock:
+                app.last_services_scan = time.time() - 3.0
+            res6 = self.client.get("/api/services")
+            self.assertEqual(mock_scan.call_count, 4)
+
 if __name__ == "__main__":
     unittest.main()
+
 

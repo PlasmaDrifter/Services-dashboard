@@ -26,10 +26,28 @@ GITHUB_REPO = "PlasmaDrifter/Services-dashboard"
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-# In-memory cached scan result
+# In-memory cached scan result and TTL configurations
 cache_lock = threading.Lock()
 cached_data = None
 cached_system_data = None
+last_services_scan = 0.0
+last_system_scan = 0.0
+
+SERVICES_CACHE_TTL = 10.0   # seconds for user services & containers
+SYSTEM_CACHE_TTL = 10.0     # seconds for system tasks & timers
+TRANSIENT_CACHE_TTL = 2.0   # seconds when any unit is activating/deactivating
+BACKGROUND_SCAN_INTERVAL = 300  # 5 minutes background refresh
+
+def has_transient_states(data: dict) -> bool:
+    if not data or not isinstance(data, dict):
+        return False
+    for item in data.get("services", []):
+        if isinstance(item, dict):
+            state = item.get("active_state", "")
+            sub = item.get("sub_state", "")
+            if state in ("activating", "deactivating", "reloading") or sub in ("start-pre", "start-post", "auto-restart"):
+                return True
+    return False
 
 UPDATE_CACHE = {
     "last_checked": 0,
@@ -294,25 +312,57 @@ def trigger_server_restart():
     t.start()
 
 
-def run_periodic_scanner(interval_seconds=86400):
-    global cached_data
+def run_periodic_scanner(interval_seconds=BACKGROUND_SCAN_INTERVAL):
+    global cached_data, cached_system_data, last_services_scan, last_system_scan
     while True:
         try:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running automatic daily services scan...")
+            sleep_time = interval_seconds
+            with cache_lock:
+                if has_transient_states(cached_data):
+                    sleep_time = 3.0
+            time.sleep(sleep_time)
+
+            now = time.time()
             new_data = scanner.scan_all()
+            new_system = scanner.scan_system_tasks()
             with cache_lock:
                 cached_data = new_data
+                last_services_scan = now
+                cached_system_data = new_system
+                last_system_scan = now
         except Exception as e:
             print("Error in background scan:", e)
-        time.sleep(interval_seconds)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global cached_data
+    global cached_data, cached_system_data, last_services_scan, last_system_scan
+    now = time.time()
     with cache_lock:
         cached_data = scanner.scan_all()
-    # Start background thread (86400s = 24h)
-    scanner_thread = threading.Thread(target=run_periodic_scanner, args=(86400,), daemon=True)
+        last_services_scan = now
+        cached_system_data = scanner.scan_system_tasks()
+        last_system_scan = now
+
+    def _startup_settling_scan():
+        # Automatically re-scan 4 seconds after startup to settle any services
+        # still in ExecStartPost or startup initialization at boot.
+        time.sleep(4.0)
+        try:
+            settled_data = scanner.scan_all()
+            settled_system = scanner.scan_system_tasks()
+            with cache_lock:
+                cached_data = settled_data
+                last_services_scan = time.time()
+                cached_system_data = settled_system
+                last_system_scan = time.time()
+        except Exception as e:
+            print("Error in startup settling scan:", e)
+
+    settling_thread = threading.Thread(target=_startup_settling_scan, daemon=True)
+    settling_thread.start()
+
+    # Start background thread (300s = 5 minutes)
+    scanner_thread = threading.Thread(target=run_periodic_scanner, args=(BACKGROUND_SCAN_INTERVAL,), daemon=True)
     scanner_thread.start()
     yield
 
@@ -327,19 +377,23 @@ class ActionRequest(BaseModel):
 
 @app.get("/api/services")
 def get_services():
-    global cached_data
+    global cached_data, last_services_scan
+    now = time.time()
     with cache_lock:
-        if cached_data is None:
+        ttl = TRANSIENT_CACHE_TTL if has_transient_states(cached_data) else SERVICES_CACHE_TTL
+        if cached_data is None or (now - last_services_scan >= ttl):
             cached_data = scanner.scan_all()
+            last_services_scan = time.time()
         return cached_data
 
 @app.post("/api/scan")
 def trigger_scan():
-    global cached_data
+    global cached_data, last_services_scan
     try:
         new_data = scanner.scan_all()
         with cache_lock:
             cached_data = new_data
+            last_services_scan = time.time()
         return {"status": "ok", "data": cached_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -391,19 +445,22 @@ def get_logs(name: str, lines: int = 100, scope: str = "user"):
 
 @app.get("/api/system-tasks")
 def get_system_tasks():
-    global cached_system_data
+    global cached_system_data, last_system_scan
+    now = time.time()
     with cache_lock:
-        if cached_system_data is None:
+        if cached_system_data is None or (now - last_system_scan >= SYSTEM_CACHE_TTL):
             cached_system_data = scanner.scan_system_tasks()
+            last_system_scan = time.time()
         return cached_system_data
 
 @app.post("/api/system-tasks/scan")
 def trigger_system_tasks_scan():
-    global cached_system_data
+    global cached_system_data, last_system_scan
     try:
         new_data = scanner.scan_system_tasks()
         with cache_lock:
             cached_system_data = new_data
+            last_system_scan = time.time()
         return {"status": "ok", "data": cached_system_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
