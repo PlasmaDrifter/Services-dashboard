@@ -670,6 +670,54 @@ body.density-spacious .service-card {
   line-height: 1;
 }
 
+.cron-quick-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--accent-purple, #c6a0f6);
+  background: rgba(198, 160, 246, 0.12);
+  border: 1px solid rgba(198, 160, 246, 0.3);
+  padding: 2px 9px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  line-height: 1.4;
+  margin-left: 6px;
+}
+
+.cron-quick-pill:hover {
+  background: rgba(198, 160, 246, 0.22);
+  border-color: rgba(198, 160, 246, 0.5);
+  color: #fff;
+}
+
+.cron-quick-pill code {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text-main, #cad3f5);
+}
+
+.cron-quick-pill svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.cron-quick-pill:hover svg {
+  opacity: 1;
+}
+
+.btn-copy-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .category-section.is-filtered .category-header {
   border-bottom-color: var(--border-color);
 }

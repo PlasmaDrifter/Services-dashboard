@@ -804,7 +804,16 @@ function renderSystemView() {
 
   // 3. Cron Jobs Section
   if (filteredCron.length > 0) {
-    const sec = createSystemSection("Cron Jobs & Scheduled Scripts", filteredCron.length, '', isFirst);
+    const editPillHtml = `
+      <button type="button" class="cron-quick-pill" onclick="copyEditCommand('crontab -e')" title="Click to copy 'crontab -e' to clipboard">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <span>Edit User Crontab: <code>crontab -e</code></span>
+      </button>
+    `;
+    const sec = createSystemSection("Cron Jobs & Scheduled Scripts", filteredCron.length, '', isFirst, '', editPillHtml);
     isFirst = false;
     sec.appendChild(renderCronJobsTable(filteredCron));
     container.appendChild(sec);
@@ -819,7 +828,7 @@ function renderSystemView() {
   }
 }
 
-function createSystemSection(title, count, badgeTheme = '', isFirst = false) {
+function createSystemSection(title, count, badgeTheme = '', isFirst = false, extraHeaderHtml = '', rightSideHtml = '') {
   const sec = document.createElement('section');
   sec.className = 'category-section';
 
@@ -853,9 +862,13 @@ function createSystemSection(title, count, badgeTheme = '', isFirst = false) {
     <div class="category-title-area">
       <h2 class="category-title">${escapeHtml(title)}</h2>
       <span class="${badgeClass}" style="${badgeStyle}">${count}</span>
+      ${extraHeaderHtml || ''}
       ${filterPillHtml}
     </div>
-    ${lastScanHtml}
+    <div class="category-header-right" style="display: flex; align-items: center; gap: 10px;">
+      ${rightSideHtml || ''}
+      ${lastScanHtml}
+    </div>
   `;
 
   const clearBtn = header.querySelector('#btn-clear-sys-pill');
@@ -976,6 +989,35 @@ function renderCronJobsTable(items) {
     </table>
   `;
   return wrapper;
+}
+
+function copyEditCommand(cmd) {
+  if (!cmd) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      showToast(`Copied to clipboard: ${cmd}`);
+    }).catch(() => {
+      fallbackCopyText(cmd);
+    });
+  } else {
+    fallbackCopyText(cmd);
+  }
+}
+
+function fallbackCopyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast(`Copied to clipboard: ${text}`);
+  } catch (err) {
+    showToast(`Command: ${text}`, 'info');
+  }
+  document.body.removeChild(ta);
 }
 
 function renderWatchersTable(items) {
@@ -1550,7 +1592,7 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.2.2";
+let cachedAppVersion = "v1.2.3";
 let cachedGithubRepo = "PlasmaDrifter/Services-dashboard";
 
 function loadSavedSettings() {
@@ -1813,7 +1855,7 @@ function renderUpdateUI(info) {
 
   const headerVer = document.getElementById("header-app-version");
   const settingsVer = document.getElementById("settings-app-version");
-  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.2");
+  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.3");
   const formattedVer = curVer.startsWith("v") ? curVer : `v${curVer}`;
   if (settingsVer) {
     settingsVer.textContent = formattedVer;
@@ -1842,7 +1884,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.2'})`;
+      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.3'})`;
     }
 
     if (btnSettings) {
@@ -1897,7 +1939,7 @@ function clearUpdateIndicator() {
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.2'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.3'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");

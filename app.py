@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.2.2"
+APP_VERSION = "v1.2.3"
 GITHUB_REPO = "PlasmaDrifter/Services-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent

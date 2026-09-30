@@ -267,6 +267,19 @@ class TestUpdaterEndpoints(unittest.TestCase):
             self.assertEqual(cat_data["name"], "fstrim.timer")
             self.assertIn("Description=Test Timer", cat_data["content"])
 
+    def test_cron_jobs_edit_command(self):
+        import scanner
+        from unittest.mock import patch, MagicMock
+
+        mock_crontab_out = "0 3 * * * /home/user/script.sh\n"
+        with patch("shutil.which", return_value="/usr/bin/crontab"), \
+             patch("subprocess.run") as mock_sub:
+            mock_sub.return_value = MagicMock(returncode=0, stdout=mock_crontab_out)
+            jobs = scanner.scan_cron_jobs()
+            user_jobs = [j for j in jobs if j.get("scope") == "user"]
+            self.assertTrue(len(user_jobs) > 0)
+            self.assertEqual(user_jobs[0].get("edit_cmd"), "crontab -e")
+
     def test_has_transient_states(self):
         from app import has_transient_states
 

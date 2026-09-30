@@ -677,7 +677,8 @@ def scan_cron_jobs():
                         "source": "crontab -l",
                         "schedule": schedule,
                         "command": command,
-                        "description": f"User scheduled cron job: {command[:60]}"
+                        "description": f"User scheduled cron job: {command[:60]}",
+                        "edit_cmd": "crontab -e"
                     })
         except Exception as e:
             print("Error reading user crontab:", e)
@@ -716,7 +717,8 @@ def scan_cron_jobs():
                                                 "source": str(entry),
                                                 "schedule": sched,
                                                 "command": f"[{user}] {cmd}",
-                                                "description": f"System cron job in {entry.name}"
+                                                "description": f"System cron job in {entry.name}",
+                                                "edit_cmd": f"sudo nano {entry}"
                                             })
                             except Exception:
                                 pass
@@ -728,7 +730,8 @@ def scan_cron_jobs():
                                 "source": str(entry),
                                 "schedule": default_sched,
                                 "command": str(entry),
-                                "description": f"System maintenance script in {cdir.name}"
+                                "description": f"System maintenance script in {cdir.name}",
+                                "edit_cmd": f"sudo nano {entry}"
                             })
             except Exception as e:
                 print(f"Error reading cron directory {cdir}: {e}")
