@@ -346,6 +346,65 @@ class TestUpdaterEndpoints(unittest.TestCase):
             res6 = self.client.get("/api/services")
             self.assertEqual(mock_scan.call_count, 4)
 
+    def test_unit_name_and_scope_validation(self):
+        import scanner
+
+        # Valid unit names
+        self.assertEqual(scanner.validate_unit_name("docker.service"), "docker.service")
+        self.assertEqual(scanner.validate_unit_name("user@1000.service"), "user@1000.service")
+        self.assertEqual(scanner.validate_unit_name("fstrim.timer"), "fstrim.timer")
+        self.assertEqual(scanner.validate_unit_name("-.mount"), "-.mount")
+        self.assertEqual(scanner.validate_unit_name("-.slice"), "-.slice")
+
+        # Invalid unit names (command injection / flag attempts / directory traversal)
+        invalid_names = [
+            "--output=json",
+            "-H127.0.0.1",
+            "../../etc/shadow",
+            "test;rm -rf /",
+            "service with spaces",
+            "test&whoami",
+            "test|id",
+            "",
+            "   ",
+            "a" * 300,
+        ]
+        for bad_name in invalid_names:
+            with self.assertRaises(ValueError):
+                scanner.validate_unit_name(bad_name)
+
+        # Scope validation
+        self.assertEqual(scanner.validate_scope("user"), "user")
+        self.assertEqual(scanner.validate_scope("system"), "system")
+        self.assertEqual(scanner.validate_scope(None, default="user"), "user")
+        with self.assertRaises(ValueError):
+            scanner.validate_scope("invalid_scope")
+        with self.assertRaises(ValueError):
+            scanner.validate_scope("--all")
+
+    def test_api_validation_rejections(self):
+        # GET /api/service/{name}/logs with invalid name or scope
+        res1 = self.client.get("/api/service/--bad-flag/logs")
+        self.assertEqual(res1.status_code, 400)
+
+        res2 = self.client.get("/api/service/test.service/logs?scope=hacked")
+        self.assertEqual(res2.status_code, 400)
+
+        # GET /api/system-unit/{name}/cat with invalid name or scope
+        res3 = self.client.get("/api/system-unit/--version/cat")
+        self.assertEqual(res3.status_code, 400)
+
+        res4 = self.client.get("/api/system-unit/dbus.service/cat?scope=root")
+        self.assertEqual(res4.status_code, 400)
+
+        # POST /api/service/{name}/action with invalid name
+        res5 = self.client.post("/api/service/--inject/action", json={"action": "restart"})
+        self.assertEqual(res5.status_code, 400)
+
+        # GET /api/service/{name}/file with invalid unit name
+        res6 = self.client.get("/api/service/foo..bar/file")
+        self.assertEqual(res6.status_code, 400)
+
 if __name__ == "__main__":
     unittest.main()
 

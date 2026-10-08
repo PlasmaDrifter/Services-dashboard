@@ -1,0 +1,7 @@
+name: plasmadrifter/services-dashboard-extensions
+version: 0.0.1
+library: true
+extensionTargets:
+  codeql/python-all: '*'
+dataExtensions:
+  - command-sanitizers.model.yml

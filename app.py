@@ -20,7 +20,7 @@ import uvicorn
 
 import scanner
 
-APP_VERSION = "v1.2.3"
+APP_VERSION = "v1.2.4"
 GITHUB_REPO = "PlasmaDrifter/Services-dashboard"
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -162,7 +162,7 @@ def check_github_update(force=False, enabled=True):
                 "release_url": UPDATE_CACHE["release_url"],
                 "current_version": APP_VERSION,
                 "check_enabled": True,
-                "error": str(e)
+                "error": "Failed to check for updates from GitHub."
             }
 
 
@@ -401,8 +401,11 @@ def trigger_scan():
 @app.get("/api/service/{name}/file")
 def get_file(name: str):
     try:
-        content, path = scanner.get_unit_content(name)
-        return {"name": name, "file_path": path, "content": content}
+        safe_name = scanner.validate_unit_name(name)
+        content, path = scanner.get_unit_content(safe_name)
+        return {"name": safe_name, "file_path": path, "content": content}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -411,35 +414,45 @@ def get_file(name: str):
 @app.post("/api/service/{name}/file")
 def save_file(name: str, req: FileUpdateRequest):
     try:
-        backup_path = scanner.save_unit_content(name, req.content)
+        safe_name = scanner.validate_unit_name(name)
+        backup_path = scanner.save_unit_content(safe_name, req.content)
         restarted = False
         if req.restart:
-            scanner.service_action(name, "restart")
+            scanner.service_action(safe_name, "restart")
             restarted = True
             
         # Refresh cache
         trigger_scan()
         return {"status": "saved", "backup": backup_path, "restarted": restarted}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/service/{name}/action")
 def perform_action(name: str, req: ActionRequest):
     try:
-        scanner.service_action(name, req.action)
+        safe_name = scanner.validate_unit_name(name)
+        scanner.service_action(safe_name, req.action)
         # Short sleep to let systemd state update
         time.sleep(0.5)
         trigger_scan()
         return {"status": "ok", "action": req.action}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/service/{name}/logs")
 def get_logs(name: str, lines: int = 100, scope: str = "user"):
     try:
+        safe_name = scanner.validate_unit_name(name)
+        safe_scope = scanner.validate_scope(scope, default="user")
         lines_count = min(max(int(lines), 1), 1000)
-        logs = scanner.get_service_logs(name, lines=lines_count, scope=scope)
-        return {"name": name, "scope": scope, "logs": logs}
+        logs = scanner.get_service_logs(safe_name, lines=lines_count, scope=safe_scope)
+        return {"name": safe_name, "scope": safe_scope, "logs": logs}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -468,8 +481,12 @@ def trigger_system_tasks_scan():
 @app.get("/api/system-unit/{name}/cat")
 def get_system_unit_definition(name: str, scope: str = "system"):
     try:
-        content = scanner.get_system_unit_cat(name, scope=scope)
-        return {"name": name, "scope": scope, "content": content}
+        safe_name = scanner.validate_unit_name(name)
+        safe_scope = scanner.validate_scope(scope, default="system")
+        content = scanner.get_system_unit_cat(safe_name, scope=safe_scope)
+        return {"name": safe_name, "scope": safe_scope, "content": content}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

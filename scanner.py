@@ -15,6 +15,38 @@ QUADLET_DIR = Path.home() / ".config" / "containers" / "systemd"
 METADATA_FILE = Path(__file__).resolve().parent / "metadata.json"
 metadata_lock = threading.RLock()
 
+UNIT_NAME_PATTERN = re.compile(r"^(?:-\.(?:mount|slice)|[a-zA-Z0-9_@][a-zA-Z0-9_@.\-:\\]*)$")
+VALID_SCOPES = frozenset({"user", "system"})
+
+def validate_unit_name(unit_name: str) -> str:
+    """
+    Validates a systemd unit name to prevent command/argument injection
+    and directory traversal.
+    """
+    if not isinstance(unit_name, str):
+        raise ValueError("Unit name must be a string")
+    name = unit_name.strip()
+    if not name or len(name) > 256:
+        raise ValueError("Invalid unit name length")
+    if "/" in name or ".." in name or "\x00" in name:
+        raise ValueError("Unit name cannot contain path separators, null bytes, or traversal tokens")
+    if not UNIT_NAME_PATTERN.fullmatch(name):
+        raise ValueError(f"Invalid unit name: {unit_name}")
+    return name
+
+def validate_scope(scope: str, default: str = "user") -> str:
+    """
+    Validates the systemd scope ('user' or 'system').
+    """
+    if not scope:
+        return default
+    if not isinstance(scope, str):
+        raise ValueError("Scope must be a string")
+    clean = scope.strip().lower()
+    if clean not in VALID_SCOPES:
+        raise ValueError(f"Invalid scope '{scope}': must be 'user' or 'system'")
+    return clean
+
 KNOWN_PORTS = {
     "mam-bonus-store.service": 5000,
     "flame.service": 5005,
@@ -458,12 +490,15 @@ def scan_all():
     }
 
 def get_unit_content(unit_name):
-    target = CONFIG_DIR / unit_name
+    unit_name = validate_unit_name(unit_name)
+    target = (CONFIG_DIR / unit_name).resolve()
+    if not str(target).startswith(str(CONFIG_DIR.resolve())):
+        raise ValueError("Invalid unit path")
     if not target.exists():
         # Check quadlet
         if unit_name.endswith(".service"):
-            qtarget = QUADLET_DIR / f"{unit_name[:-8]}.container"
-            if qtarget.exists():
+            qtarget = (QUADLET_DIR / f"{unit_name[:-8]}.container").resolve()
+            if str(qtarget).startswith(str(QUADLET_DIR.resolve())) and qtarget.exists():
                 target = qtarget
     if not target.exists():
         raise FileNotFoundError(f"Unit file not found: {unit_name}")
@@ -471,11 +506,14 @@ def get_unit_content(unit_name):
         return f.read(), str(target)
 
 def save_unit_content(unit_name, new_content):
-    target = CONFIG_DIR / unit_name
+    unit_name = validate_unit_name(unit_name)
+    target = (CONFIG_DIR / unit_name).resolve()
+    if not str(target).startswith(str(CONFIG_DIR.resolve())):
+        raise ValueError("Invalid unit path")
     if not target.exists():
         if unit_name.endswith(".service"):
-            qtarget = QUADLET_DIR / f"{unit_name[:-8]}.container"
-            if qtarget.exists():
+            qtarget = (QUADLET_DIR / f"{unit_name[:-8]}.container").resolve()
+            if str(qtarget).startswith(str(QUADLET_DIR.resolve())) and qtarget.exists():
                 target = qtarget
     if not target.exists():
         raise FileNotFoundError(f"Unit file not found: {unit_name}")
@@ -496,25 +534,30 @@ def service_action(unit_name, action):
     if action not in valid_actions:
         raise ValueError(f"Invalid action: {action}")
     
+    safe_unit = validate_unit_name(unit_name)
+
     if not shutil.which("systemctl"):
         raise RuntimeError("systemctl is not available on this system.")
 
     res = subprocess.run(
-        ["systemctl", "--user", action, unit_name],
+        ["systemctl", "--user", action, "--", safe_unit],
         capture_output=True, text=True, timeout=15
     )
     if res.returncode != 0:
-        raise RuntimeError(res.stderr.strip() or f"Failed to {action} {unit_name}")
+        raise RuntimeError(res.stderr.strip() or f"Failed to {action} {safe_unit}")
     return True
 
 def get_service_logs(unit_name, lines=100, scope="user"):
     if not shutil.which("journalctl"):
         return "journalctl is not available on this system."
 
+    safe_unit = validate_unit_name(unit_name)
+    safe_scope = validate_scope(scope, default="user")
+
     cmd = ["journalctl"]
-    if scope == "user":
+    if safe_scope == "user":
         cmd.append("--user")
-    cmd.extend(["-u", unit_name, "-n", str(lines), "--no-pager"])
+    cmd.extend(["--unit", safe_unit, "-n", str(lines), "--no-pager", "--"])
 
     res = subprocess.run(
         cmd,
@@ -859,10 +902,13 @@ def get_system_unit_cat(unit_name: str, scope: str = "system"):
     if not shutil.which("systemctl"):
         return "systemctl is not available on this system."
 
+    safe_unit = validate_unit_name(unit_name)
+    safe_scope = validate_scope(scope, default="system")
+
     cmd = ["systemctl"]
-    if scope == "user":
+    if safe_scope == "user":
         cmd.append("--user")
-    cmd.extend(["cat", unit_name])
+    cmd.extend(["cat", "--", safe_unit])
 
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
     if res.stdout:

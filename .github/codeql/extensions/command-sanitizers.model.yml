@@ -1,0 +1,7 @@
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierModel
+    data:
+      - ["scanner", "Member[validate_unit_name].ReturnValue", "command-injection"]
+      - ["app", "Member[validate_unit_name].ReturnValue", "command-injection"]
