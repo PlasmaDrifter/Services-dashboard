@@ -42,45 +42,78 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-### 1. Clone and Install
+### 1. Automated Installation (Recommended)
+
+Clone the repository and run the installer:
 
 ```bash
 git clone https://github.com/PlasmaDrifter/Services-dashboard.git
 cd Services-dashboard
-pip install -r requirements.txt
+./install.sh
 ```
 
-### 2. Run the Dashboard
+The installer automatically:
+- Checks Python dependencies (`fastapi`, `uvicorn`, `pydantic`).
+- Installs application icons to `~/.local/share/icons/hicolor/`.
+- Creates a CLI command symlink `~/.local/bin/services-dashboard`.
+- Creates a desktop menu launcher `~/.local/share/applications/services-dashboard.desktop`.
+- Installs, reloads, and enables the systemd user service `services-dashboard.service`.
+
+Once installed, the dashboard is running at:
+`http://localhost:5100`
+
+### 2. CLI Command Usage
+
+Use the `services-dashboard` command to control or inspect the service:
 
 ```bash
+# Launch/open dashboard in default browser (starts service if stopped)
+services-dashboard launch
+
+# Start background service
+services-dashboard start
+
+# Stop service
+services-dashboard stop
+
+# Restart service
+services-dashboard restart
+
+# Check server status
+services-dashboard status
+
+# Stream live systemd journal logs
+services-dashboard logs
+```
+
+### 3. Uninstallation
+
+To remove the background service, desktop launcher, icons, and CLI link:
+
+```bash
+./uninstall.sh
+```
+
+### 4. Manual Setup (Alternative)
+
+If you prefer to run or configure the service manually:
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run directly
 python3 app.py
 ```
 
-The web interface will be available at:
-`http://localhost:5100`
+To manually configure the systemd user service:
 
-### 3. Run as a Systemd User Service
-
-To run automatically in the background on system boot:
-
-1. Copy the unit file to your user systemd directory:
-   ```bash
-   mkdir -p ~/.config/systemd/user/
-   cp services-dashboard.service ~/.config/systemd/user/
-   ```
-
-2. Adjust the `WorkingDirectory` and `ExecStart` paths in `~/.config/systemd/user/services-dashboard.service` if your installation path differs (the unit uses `%h` to resolve your home directory automatically).
-
-3. Reload and enable the service:
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now services-dashboard.service
-   ```
-
-4. Check the service status:
-   ```bash
-   systemctl --user status services-dashboard.service
-   ```
+```bash
+mkdir -p ~/.config/systemd/user/
+cp services-dashboard.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now services-dashboard.service
+```
 
 ## Configuration & Architecture
 
