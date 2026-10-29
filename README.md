@@ -110,6 +110,19 @@ To remove the background service, desktop launcher, icons, and CLI symlink:
 ./uninstall.sh
 ```
 
+### Updating
+
+To update an existing installation to the latest version:
+
+```bash
+cd services-dashboard
+git pull
+./install.sh
+systemctl --user restart services-dashboard.service
+```
+
+Running `./install.sh` updates the application files, desktop launchers, CLI symlinks, and refreshes the background user service.
+
 ### 4. Manual Setup (Alternative)
 
 If you prefer to run or configure the service manually:
