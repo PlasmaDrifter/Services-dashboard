@@ -170,10 +170,11 @@ Services Dashboard provides a clean REST API for automation:
 
 ## Configuration & Architecture
 
-- **Backend**: FastAPI with Uvicorn, querying systemd user session (`systemctl --user`), reading Quadlet container configurations, crontab, and system timers.
-- **Frontend**: Single-page application using modern CSS custom properties and native DOM manipulation.
-- **Port Mapping**: Discovers ports via `PublishPort=` in Quadlets or regex matching in Exec directives, supplemented by known port defaults in `scanner.py`.
-- **Security**: Validated systemd unit names, argument injection safeguards (`--` delimiters), and path traversal guards.
+- **Backend**: FastAPI with Uvicorn, concurrently querying systemd (`systemctl --user` and system scope), Podman/Docker containers, Quadlet container configurations, crontab, and system timers with TTL caching.
+- **Frontend**: Single-page application using modern CSS custom properties, contrast-aware theme tokens, and delegated DOM event handling.
+- **Port Mapping**: Discovers ports via `PublishPort=` in Quadlets or directive matching in unit files, falling back to known port defaults in `scanner.py`.
+- **Network Binding**: Binds to `127.0.0.1:5100` by default. Set `SERVICES_DASHBOARD_HOST` (e.g. `0.0.0.0` for LAN access) and `SERVICES_DASHBOARD_PORT` environment variables to customize the listen address and port.
+- **Security**: Validated systemd unit names and scopes, argument injection safeguards (`--` delimiters), `Path.is_relative_to` path traversal guards, Fetch Metadata/Origin CSRF protection on state-changing routes, security response headers, and `http://`/`https://` URL validation.
 
 ---
 
