@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
@@ -26,8 +27,8 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-# 2. Stop any standalone running instances
-pkill -f "app.py" 2>/dev/null || true
+# 2. Stop any standalone running instances from this repository only
+pkill -f "${REPO_DIR}/app.py" 2>/dev/null || true
 
 # 3. Remove installed files
 rm -f "${SYSTEMD_USER_DIR}/${SERVICE_NAME}"

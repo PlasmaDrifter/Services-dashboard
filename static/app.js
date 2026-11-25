@@ -6,13 +6,17 @@ let currentSysCategoryFilter = 'all'; // 'all', 'timers', 'cron', 'watchers', 'f
 let currentFilter = 'all'; // 'all', 'running', 'inactive'
 let currentCategoryFilter = 'all'; // 'all', 'web', 'containers', 'timers'
 let currentSearch = '';
-let currentViewMode = 'table';
 let currentEditingUnit = null;
 let currentLogsUnit = null;
 let currentLogsScope = 'user';
 let currentLastScanText = 'Last scan: --:--:--';
 let lastDataLoadTime = 0;
 let activatingPollTimer = null;
+let toastTimer = null;
+let editorCloseTimer = null;
+let loadDataAbortController = null;
+let editorFetchController = null;
+let logsFetchController = null;
 
 const CATEGORY_ORDER = [
   "Web Apps & Dashboards",
@@ -22,14 +26,23 @@ const CATEGORY_ORDER = [
   "Local Utilities & Daemons"
 ];
 
+const TRANSIENT_ACTIVE_STATES = new Set(["activating", "deactivating", "reloading"]);
+const TRANSIENT_SUB_STATES = new Set(["start-pre", "start-post", "auto-restart", "stop-sigterm", "stop-post"]);
+const TRANSIENT_CONTAINER_STATES = new Set(["restarting", "created", "removing"]);
+
 document.addEventListener('DOMContentLoaded', () => {
   loadSavedSettings();
   applyAllActiveSettings();
   initEventListeners();
   initSettingsUI();
   loadData();
-  checkAppUpdatesAsync();
 });
+
+function setActiveStatusFilterButton(filterVal) {
+  document.querySelectorAll('.filter-tabs .filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === filterVal);
+  });
+}
 
 function updateStatCardActiveState() {
   document.querySelectorAll('#services-stats-group .stat-card').forEach(card => {
@@ -42,19 +55,12 @@ function updateStatCardActiveState() {
       } else if (currentFilter === 'all' && cat === 'all') {
         isActive = true;
       }
-    } else {
-      if (cat === currentCategoryFilter) {
-        isActive = true;
-      }
+    } else if (cat === currentCategoryFilter) {
+      isActive = true;
     }
 
-    if (isActive) {
-      card.classList.add('active');
-      card.setAttribute('aria-pressed', 'true');
-    } else {
-      card.classList.remove('active');
-      card.setAttribute('aria-pressed', 'false');
-    }
+    card.classList.toggle('active', isActive);
+    card.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 }
 
@@ -62,25 +68,18 @@ function handleStatCardSelection(card) {
   const cat = card.dataset.category;
   const isCurrentlyActive = card.classList.contains('active');
 
-  // Toggle behavior: if clicking the active category card (other than 'all'), toggle off back to 'all'
   if (isCurrentlyActive && cat !== 'all') {
     currentCategoryFilter = 'all';
     currentFilter = 'all';
-    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
-    const allBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="all"]');
-    if (allBtn) allBtn.classList.add('active');
+    setActiveStatusFilterButton('all');
   } else if (cat === 'all') {
     currentCategoryFilter = 'all';
     currentFilter = 'all';
-    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
-    const allBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="all"]');
-    if (allBtn) allBtn.classList.add('active');
+    setActiveStatusFilterButton('all');
   } else if (cat === 'running') {
     currentFilter = 'running';
     currentCategoryFilter = 'all';
-    document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
-    const runBtn = document.querySelector('.filter-tabs:not(.view-switcher-tabs) .filter-btn[data-filter="running"]');
-    if (runBtn) runBtn.classList.add('active');
+    setActiveStatusFilterButton('running');
   } else {
     currentCategoryFilter = cat;
   }
@@ -92,13 +91,9 @@ function handleStatCardSelection(card) {
 function updateSystemStatCardActiveState() {
   document.querySelectorAll('#system-stats-group .stat-card').forEach(card => {
     const cat = card.dataset.sysCategory;
-    if (cat === currentSysCategoryFilter) {
-      card.classList.add('active');
-      card.setAttribute('aria-pressed', 'true');
-    } else {
-      card.classList.remove('active');
-      card.setAttribute('aria-pressed', 'false');
-    }
+    const isActive = cat === currentSysCategoryFilter;
+    card.classList.toggle('active', isActive);
+    card.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 }
 
@@ -146,17 +141,46 @@ function initEventListeners() {
   });
 
   // Filter buttons (Running / Stopped / All)
-  document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(btn => {
+  document.querySelectorAll('.filter-tabs .filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.filter-tabs:not(.view-switcher-tabs) .filter-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
       currentFilter = btn.dataset.filter;
+      setActiveStatusFilterButton(currentFilter);
       updateStatCardActiveState();
       renderContent();
     });
   });
 
-  // View Switcher (Option B: Services vs System Tasks)
+  // Delegated actions inside #categories-container (prevents inline onclick XSS / escaping issues)
+  const categoriesContainer = document.getElementById('categories-container');
+  if (categoriesContainer) {
+    categoriesContainer.addEventListener('click', (e) => {
+      const actionBtn = e.target.closest('[data-ui-action]');
+      if (!actionBtn) return;
+
+      const uiAction = actionBtn.dataset.uiAction;
+      if (uiAction === 'service-action') {
+        performAction(actionBtn.dataset.unit, actionBtn.dataset.action);
+      } else if (uiAction === 'open-logs') {
+        openLogsModal(actionBtn.dataset.unit, actionBtn.dataset.scope || 'user');
+      } else if (uiAction === 'open-editor') {
+        openEditorModal(actionBtn.dataset.unit);
+      } else if (uiAction === 'open-inspect') {
+        openInspectModal(actionBtn.dataset.unit, actionBtn.dataset.scope || 'system');
+      } else if (uiAction === 'copy-cmd') {
+        copyEditCommand(actionBtn.dataset.copy);
+      } else if (uiAction === 'clear-service-category') {
+        currentCategoryFilter = 'all';
+        updateStatCardActiveState();
+        renderContent();
+      } else if (uiAction === 'clear-system-category') {
+        currentSysCategoryFilter = 'all';
+        updateSystemStatCardActiveState();
+        renderContent();
+      }
+    });
+  }
+
+  // View Switcher (Services vs System Tasks)
   const servicesViewBtn = document.getElementById('view-tab-services');
   const systemViewBtn = document.getElementById('view-tab-system');
   if (servicesViewBtn && systemViewBtn) {
@@ -205,7 +229,7 @@ function initEventListeners() {
   const btnDoneSettings = document.getElementById('settings-done-btn');
   if (btnDoneSettings) btnDoneSettings.addEventListener('click', closeSettingsModal);
 
-  // Close modals on escape key or outside click
+  // Close modals on Escape key or backdrop click
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeEditorModal();
@@ -215,11 +239,12 @@ function initEventListeners() {
   });
 
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    if (overlay.id === 'update-progress-modal') return;
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        closeEditorModal();
-        closeLogsModal();
-        closeSettingsModal();
+        if (overlay.id === 'editor-modal') closeEditorModal();
+        else if (overlay.id === 'logs-modal') closeLogsModal();
+        else if (overlay.id === 'settings-modal') closeSettingsModal();
       }
     });
   });
@@ -236,53 +261,60 @@ function initEventListeners() {
     }
   });
 
-  // Automatically refresh when switching back to tab if more than 10s passed
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      if (Date.now() - lastDataLoadTime > 10000) {
-        loadData();
-      }
-    }
-  });
-
-  window.addEventListener('focus', () => {
+  // Refresh when returning to tab if stale (>10s)
+  const refreshIfStale = () => {
     if (Date.now() - lastDataLoadTime > 10000) {
       loadData();
     }
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      refreshIfStale();
+    }
   });
+  window.addEventListener('focus', refreshIfStale);
 }
 
-async function loadData() {
+async function loadData(options = { servicesOnly: false }) {
   lastDataLoadTime = Date.now();
-  try {
-    const [resServices, resSystem] = await Promise.all([
-      fetch('/api/services'),
-      fetch('/api/system-tasks')
-    ]);
+  if (loadDataAbortController) {
+    loadDataAbortController.abort();
+  }
+  loadDataAbortController = new AbortController();
+  const { signal } = loadDataAbortController;
 
-    if (resServices.ok) {
+  try {
+    if (options.servicesOnly) {
+      const resServices = await fetch('/api/services', { signal });
+      if (!resServices.ok) {
+        throw new Error(`HTTP ${resServices.status} fetching services`);
+      }
       const data = await resServices.json();
       applyData(data);
+      return;
     }
+
+    const [resServices, resSystem] = await Promise.all([
+      fetch('/api/services', { signal }),
+      fetch('/api/system-tasks', { signal })
+    ]);
+
+    if (!resServices.ok) {
+      throw new Error(`HTTP ${resServices.status} fetching services`);
+    }
+    const data = await resServices.json();
+    applyData(data);
+
     if (resSystem.ok) {
       const sysData = await resSystem.json();
       applySystemData(sysData);
+    } else {
+      console.warn(`System tasks request failed with HTTP ${resSystem.status}`);
     }
   } catch (err) {
+    if (err && err.name === 'AbortError') return;
     console.error('Failed to load services data:', err);
     showToast('Failed to fetch services data', 'error');
-  }
-}
-
-async function loadSystemData() {
-  try {
-    const res = await fetch('/api/system-tasks');
-    if (res.ok) {
-      const data = await res.json();
-      applySystemData(data);
-    }
-  } catch (err) {
-    console.error('Failed to load system tasks:', err);
   }
 }
 
@@ -290,7 +322,7 @@ async function handleManualScan() {
   const btn = document.getElementById('btn-scan');
   const spinIcon = btn.querySelector('.spin-icon');
   const btnText = document.getElementById('scan-btn-text');
-  
+
   btn.disabled = true;
   spinIcon.classList.add('spinning');
   btnText.textContent = 'Scanning...';
@@ -301,14 +333,16 @@ async function handleManualScan() {
       fetch('/api/system-tasks/scan', { method: 'POST' })
     ]);
 
-    if (resScan.ok) {
-      const result = await resScan.json();
-      applyData(result.data);
+    if (!resScan.ok || !resSysScan.ok) {
+      const failedRes = !resScan.ok ? resScan : resSysScan;
+      const errBody = await failedRes.json().catch(() => ({}));
+      throw new Error(errBody.detail || `Server returned HTTP ${failedRes.status}`);
     }
-    if (resSysScan.ok) {
-      const sysResult = await resSysScan.json();
-      applySystemData(sysResult.data);
-    }
+
+    const [result, sysResult] = await Promise.all([resScan.json(), resSysScan.json()]);
+    lastDataLoadTime = Date.now();
+    applyData(result.data);
+    applySystemData(sysResult.data);
     showToast('Scan completed successfully!');
   } catch (err) {
     console.error('Manual scan error:', err);
@@ -328,11 +362,19 @@ function applySystemData(data) {
   const totalSys = (stats.total_system_timers || 0) + (stats.total_cron_jobs || 0) + (stats.total_watchers || 0);
   const badgeCount = document.getElementById('view-tab-system-count');
   if (badgeCount) {
-    badgeCount.textContent = totalSys > 0 ? totalSys : '0';
-    if (stats.failed_units_count && stats.failed_units_count > 0) {
+    const failedCount = stats.failed_units_count || 0;
+    if (failedCount > 0) {
+      badgeCount.style.display = 'inline-flex';
+      badgeCount.textContent = String(failedCount);
       badgeCount.classList.add('badge-failed');
-      badgeCount.title = `${stats.failed_units_count} failed unit(s) detected`;
+      badgeCount.title = `${failedCount} failed unit(s) detected`;
+    } else if (totalSys > 0) {
+      badgeCount.style.display = 'inline-flex';
+      badgeCount.textContent = String(totalSys);
+      badgeCount.classList.remove('badge-failed');
+      badgeCount.title = `${totalSys} system task(s)`;
     } else {
+      badgeCount.style.display = 'none';
       badgeCount.classList.remove('badge-failed');
       badgeCount.title = '';
     }
@@ -354,11 +396,7 @@ function applySystemData(data) {
   if (statFailed) {
     const failedCount = stats.failed_units_count || 0;
     statFailed.textContent = failedCount;
-    if (failedCount > 0) {
-      statFailed.className = 'stat-value text-danger';
-    } else {
-      statFailed.className = 'stat-value text-success';
-    }
+    statFailed.className = failedCount > 0 ? 'stat-value text-danger' : 'stat-value text-success';
   }
 
   if (currentActiveView === 'system') {
@@ -369,16 +407,16 @@ function applySystemData(data) {
 function applyData(data) {
   allServices = data.services || [];
   allContainers = data.containers || [];
-  
-  // Calculate Web apps count
+
   const webCount = allServices.filter(s => s.category === "Web Apps & Dashboards").length;
   const runningServicesCount = allServices.filter(s => s.active_state === 'active').length;
-  
-  // Update stats
+
   document.getElementById('stat-total-services').textContent = allServices.length;
   document.getElementById('stat-running-services').textContent = runningServicesCount;
   document.getElementById('stat-web').textContent = webCount;
-  const containerCount = (data.stats && typeof data.stats.total_containers === 'number') ? data.stats.total_containers : allContainers.length;
+  const containerCount = (data.stats && typeof data.stats.total_containers === 'number')
+    ? data.stats.total_containers
+    : allContainers.length;
   const statContainersEl = document.getElementById('stat-containers');
   if (statContainersEl) {
     statContainersEl.textContent = containerCount;
@@ -392,25 +430,24 @@ function applyData(data) {
     currentLastScanText = `Last scan: ${data.last_scan}`;
   }
 
-  renderContent();
-
-  const scanEl = document.getElementById('last-scan-time');
-  if (scanEl) {
-    scanEl.textContent = currentLastScanText;
+  if (currentActiveView === 'services') {
+    renderContent();
+    const scanEl = document.getElementById('last-scan-time');
+    if (scanEl) {
+      scanEl.textContent = currentLastScanText;
+    }
   }
 
-  // If any service is currently in a transient state (activating/deactivating), auto-refresh in 2.5s
-  const hasTransient = allServices.some(s =>
-    s.active_state === 'activating' ||
-    s.active_state === 'deactivating' ||
-    s.sub_state === 'start-post' ||
-    s.sub_state === 'start-pre'
-  );
+  // If any service or container is in a transient state, poll only /api/services in 2.5s
+  const hasTransient =
+    allServices.some(s => TRANSIENT_ACTIVE_STATES.has(s.active_state) || TRANSIENT_SUB_STATES.has(s.sub_state)) ||
+    allContainers.some(c => TRANSIENT_CONTAINER_STATES.has((c.state || '').toLowerCase()));
+
   if (hasTransient) {
     if (!activatingPollTimer) {
       activatingPollTimer = setTimeout(() => {
         activatingPollTimer = null;
-        loadData();
+        loadData({ servicesOnly: true });
       }, 2500);
     }
   } else if (activatingPollTimer) {
@@ -420,7 +457,7 @@ function applyData(data) {
 }
 
 function getUnifiedItems() {
-  let combined = [];
+  const combined = [];
   const containerMap = new Map();
   allContainers.forEach(c => {
     containerMap.set(c.name.toLowerCase(), c);
@@ -430,15 +467,15 @@ function getUnifiedItems() {
 
   // Process services (including Quadlets)
   allServices.forEach(s => {
-    let cleanName = s.name.replace('.service', '').replace('container-', '');
-    let matchedContainer = containerMap.get(cleanName.toLowerCase());
+    const cleanName = s.name.replace(/\.service$/, '').replace(/^container-/, '');
+    const matchedContainer = containerMap.get(cleanName.toLowerCase());
 
     if (matchedContainer) {
       matchedContainerNames.add(matchedContainer.name.toLowerCase());
     }
 
     let description = s.description;
-    let engine = s.type === 'quadlet' ? 'podman' : (matchedContainer ? matchedContainer.engine : null);
+    const engine = s.type === 'quadlet' ? 'podman' : (matchedContainer ? matchedContainer.engine : null);
     if (!description && matchedContainer) {
       const engineLabel = matchedContainer.engine === 'docker' ? 'Docker' : 'Podman';
       description = `${engineLabel} Container: ${matchedContainer.image}`;
@@ -459,7 +496,7 @@ function getUnifiedItems() {
     });
   });
 
-  // Only add standalone containers that aren't already represented by a systemd quadlet or service
+  // Add standalone containers not already represented by a systemd quadlet or service
   allContainers.forEach(c => {
     if (!matchedContainerNames.has(c.name.toLowerCase())) {
       combined.push({
@@ -508,7 +545,10 @@ function getUnifiedItems() {
       const matchDesc = item.description.toLowerCase().includes(currentSearch);
       const matchPort = item.port ? String(item.port).includes(currentSearch) : false;
       const matchEngine = item.engine && item.engine.toLowerCase().includes(currentSearch);
-      const matchTimer = item.timer ? (item.timer.name.toLowerCase().includes(currentSearch) || (item.timer.schedule && item.timer.schedule.toLowerCase().includes(currentSearch))) : false;
+      const matchTimer = item.timer
+        ? (item.timer.name.toLowerCase().includes(currentSearch) ||
+           (item.timer.schedule && item.timer.schedule.toLowerCase().includes(currentSearch)))
+        : false;
       return matchName || matchFile || matchDesc || matchPort || matchEngine || matchTimer;
     });
   }
@@ -519,7 +559,7 @@ function getUnifiedItems() {
 function renderContent() {
   const container = document.getElementById('categories-container');
   if (!container) return;
-  container.innerHTML = '';
+  container.replaceChildren();
 
   if (currentActiveView === 'system') {
     renderSystemView();
@@ -531,38 +571,37 @@ function renderContent() {
   const items = getUnifiedItems();
 
   if (items.length === 0) {
-    const isFiltered = (currentCategoryFilter !== 'all');
-    let resetBtn = '';
-    if (isFiltered) {
-      resetBtn = `<br><button class="btn btn-secondary btn-sm" id="btn-empty-clear-category" style="margin-top: 10px;">Show All Categories</button>`;
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'empty-state';
+    emptyDiv.append('No matching user services or timers found.');
+    if (currentCategoryFilter !== 'all') {
+      emptyDiv.appendChild(document.createElement('br'));
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'btn btn-secondary btn-sm';
+      resetBtn.style.marginTop = '10px';
+      resetBtn.dataset.uiAction = 'clear-service-category';
+      resetBtn.textContent = 'Show All Categories';
+      emptyDiv.appendChild(resetBtn);
     }
-    container.innerHTML = `<div class="empty-state">No matching user services or timers found.${resetBtn}</div>`;
-    const emptyClear = document.getElementById('btn-empty-clear-category');
-    if (emptyClear) {
-      emptyClear.addEventListener('click', () => {
-        currentCategoryFilter = 'all';
-        updateStatCardActiveState();
-        renderContent();
-      });
-    }
+    container.appendChild(emptyDiv);
     return;
   }
 
-  // Group by Category
-  const grouped = {};
-  CATEGORY_ORDER.forEach(cat => { grouped[cat] = []; });
+  // Group by Category (preserve CATEGORY_ORDER first, then any custom categories)
+  const grouped = new Map();
+  CATEGORY_ORDER.forEach(cat => grouped.set(cat, []));
 
   items.forEach(item => {
     const cat = item.category || "Local Utilities & Daemons";
-    if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push(item);
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat).push(item);
   });
 
-  // Render each category section
+  const fragment = document.createDocumentFragment();
   let isFirstCategory = true;
-  CATEGORY_ORDER.forEach(categoryName => {
-    const categoryItems = grouped[categoryName] || [];
-    if (categoryItems.length === 0) return;
+
+  for (const [categoryName, categoryItems] of grouped.entries()) {
+    if (categoryItems.length === 0) continue;
 
     const section = document.createElement('section');
     section.className = 'category-section';
@@ -575,20 +614,19 @@ function renderContent() {
     let filterPillHtml = '';
     if (isFilteredCategory) {
       filterPillHtml = `
-        <button class="category-filter-pill" id="btn-clear-category-filter" title="Clear category filter and show all">
+        <button type="button" class="category-filter-pill" data-ui-action="clear-service-category" title="Clear category filter and show all">
           <span>Filtered</span>
           <span class="pill-close">&times;</span>
         </button>
       `;
     }
 
-    // Category Header
     const header = document.createElement('div');
     header.className = 'category-header';
 
     let lastScanHtml = '';
-    if (categoryName === "Web Apps & Dashboards" || isFirstCategory) {
-      lastScanHtml = `<span class="last-scan-label" id="last-scan-time">${currentLastScanText}</span>`;
+    if (isFirstCategory) {
+      lastScanHtml = `<span class="last-scan-label" id="last-scan-time">${escapeHtml(currentLastScanText)}</span>`;
       isFirstCategory = false;
     }
 
@@ -602,83 +640,106 @@ function renderContent() {
     `;
     section.appendChild(header);
 
-    const clearBtn = header.querySelector('#btn-clear-category-filter');
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        currentCategoryFilter = 'all';
-        updateStatCardActiveState();
-        renderContent();
-      });
-    }
-
-    // Body: Table Mode
     const tableWrapper = document.createElement('div');
     tableWrapper.className = 'table-container';
     tableWrapper.innerHTML = renderTableHTML(categoryItems);
     section.appendChild(tableWrapper);
 
-    container.appendChild(section);
-  });
+    fragment.appendChild(section);
+  }
+
+  container.appendChild(fragment);
 }
 
 function renderTableHTML(items) {
   let rows = '';
   items.forEach(item => {
     const isRunning = item.activeState === 'active';
-    let statusClass = isRunning ? 'active' : 'inactive';
-    let statusLabel = isRunning ? 'Running' : (item.timer ? 'Timer Active' : item.activeState);
+    const isFailed = item.activeState === 'failed';
+    let statusClass = 'inactive';
+    let statusLabel = item.activeState || 'inactive';
+
+    if (isRunning) {
+      statusClass = 'active';
+      statusLabel = 'Running';
+    } else if (isFailed) {
+      statusClass = 'failed';
+      statusLabel = 'Failed';
+    } else if (item.timer) {
+      const timerActive = item.timer.active_state === 'active';
+      statusClass = timerActive ? 'timer-active' : 'inactive';
+      statusLabel = timerActive ? 'Timer Active' : 'Timer Inactive';
+    }
 
     // Port link
     let webLink = '-';
     if (item.port) {
-      webLink = `<a href="http://localhost:${item.port}" target="_blank" class="port-badge">:${item.port} &nearr;</a>`;
+      const safePort = Number.parseInt(item.port, 10);
+      if (!Number.isNaN(safePort)) {
+        webLink = `<a href="http://localhost:${safePort}" target="_blank" rel="noopener noreferrer" class="port-badge">:${safePort} &nearr;</a>`;
+      }
     }
 
     // Timer info
     let timerInfo = '-';
     if (item.timer) {
-      const nextStr = item.timer.next_str ? item.timer.next_str : (item.timer.left_str || 'Scheduled');
+      const nextStr = (item.timer.next_str && item.timer.next_str !== 'n/a')
+        ? item.timer.next_str
+        : (item.timer.left_str && item.timer.left_str !== 'None' ? item.timer.left_str : 'Scheduled');
       const rule = item.timer.schedule ? ` (${item.timer.schedule})` : '';
-      timerInfo = `<span style="color:var(--blue); font-size:0.8rem;">${escapeHtml(nextStr)}${escapeHtml(rule)}</span>`;
+      const subParts = [];
+      if (item.timer.left_str && item.timer.next_str) subParts.push(item.timer.left_str);
+      if (item.timer.passed_str) subParts.push(`Last: ${item.timer.passed_str}`);
+      const subInfo = subParts.length > 0
+        ? `<div style="font-size:0.74rem; color:var(--text-secondary);">${escapeHtml(subParts.join(' · '))}</div>`
+        : '';
+      timerInfo = `<span style="color:var(--blue); font-size:0.8rem;">${escapeHtml(nextStr)}${escapeHtml(rule)}</span>${subInfo}`;
     }
+
+    const escapedUnit = escapeHtml(item.name);
 
     // Actions
     let actionButtons = '';
     if (item.itemType === 'service' || item.itemType === 'quadlet') {
       actionButtons = `
         <div class="table-actions">
-          ${isRunning 
-            ? `<button class="btn btn-sm btn-danger-soft" onclick="performAction('${item.name}', 'stop')">Stop</button>`
-            : `<button class="btn btn-sm btn-success-soft" onclick="performAction('${item.name}', 'start')">Start</button>`
+          ${isRunning
+            ? `<button type="button" class="btn btn-sm btn-danger-soft" data-ui-action="service-action" data-unit="${escapedUnit}" data-action="stop">Stop</button>`
+            : `<button type="button" class="btn btn-sm btn-success-soft" data-ui-action="service-action" data-unit="${escapedUnit}" data-action="start">Start</button>`
           }
-          <button class="btn btn-sm btn-secondary" onclick="performAction('${item.name}', 'restart')">Restart</button>
-          <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${item.name}')">Logs</button>
-          <button class="btn btn-sm btn-primary" onclick="openEditorModal('${item.name}')">Edit</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-ui-action="service-action" data-unit="${escapedUnit}" data-action="restart">Restart</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-logs" data-unit="${escapedUnit}" data-scope="user">Logs</button>
+          <button type="button" class="btn btn-sm btn-primary" data-ui-action="open-editor" data-unit="${escapedUnit}">Edit</button>
         </div>
       `;
     } else {
+      const safePort = item.port ? Number.parseInt(item.port, 10) : NaN;
       actionButtons = `
         <div class="table-actions">
           <span class="file-path-badge">${escapeHtml(item.subState)}</span>
-          ${item.port ? `<a class="btn btn-sm btn-primary" href="http://localhost:${item.port}" target="_blank">Open UI</a>` : ''}
+          ${!Number.isNaN(safePort) ? `<a class="btn btn-sm btn-primary" href="http://localhost:${safePort}" target="_blank" rel="noopener noreferrer">Open UI</a>` : ''}
         </div>
       `;
     }
+
+    const engineBadge = item.engine
+      ? `<span class="engine-badge engine-${escapeHtml(item.engine)}">${item.engine === 'docker' ? 'Docker' : 'Podman'}</span>`
+      : '';
 
     rows += `
       <tr>
         <td style="width: 140px;">
           <span class="status-badge ${statusClass}">
             <span class="status-dot"></span>
-            ${statusLabel}
+            ${escapeHtml(statusLabel)}
           </span>
         </td>
         <td>
           <div class="table-service-name">
             ${escapeHtml(item.displayName)}
-            ${item.engine ? `<span class="engine-badge engine-${item.engine}">${item.engine === 'docker' ? 'Docker' : 'Podman'}</span>` : ''}
+            ${engineBadge}
           </div>
-          <div class="table-service-file">${escapeHtml(item.name)}</div>
+          <div class="table-service-file">${escapedUnit}</div>
         </td>
         <td class="table-desc" title="${escapeHtml(item.description)}">${escapeHtml(item.description)}</td>
         <td style="text-align: center;">${webLink}</td>
@@ -720,12 +781,10 @@ function renderSystemView() {
 
   const { system_timers = [], cron_jobs = [], watchers = [], failed_units = [] } = systemTasksData;
 
-  // Filter items based on currentSearch and currentFilter
   const filterBySearchAndStatus = (items, type) => {
     return items.filter(item => {
-      // Status filter
       if (currentFilter === 'running') {
-        if (type === 'failed') return false; // failed units are never running
+        if (type === 'failed') return false;
         if (type !== 'cron') {
           const state = (item.active_state || item.active || '').toLowerCase();
           const sub = (item.sub_state || item.sub || '').toLowerCase();
@@ -733,7 +792,7 @@ function renderSystemView() {
           if (!isRunning) return false;
         }
       } else if (currentFilter === 'inactive') {
-        if (type === 'cron') return false; // cron jobs are not inactive
+        if (type === 'cron') return false;
         if (type !== 'failed') {
           const state = (item.active_state || item.active || '').toLowerCase();
           const sub = (item.sub_state || item.sub || '').toLowerCase();
@@ -742,70 +801,68 @@ function renderSystemView() {
         }
       }
 
-      // Search filter
       if (currentSearch) {
-        const nameMatch = (item.name || '').toLowerCase().includes(currentSearch);
+        const nameMatch = (item.display_name || item.name || '').toLowerCase().includes(currentSearch);
+        const rawMatch = (item.name || '').toLowerCase().includes(currentSearch);
         const descMatch = (item.description || '').toLowerCase().includes(currentSearch);
         const actMatch = (item.activates || '').toLowerCase().includes(currentSearch);
         const cmdMatch = (item.command || '').toLowerCase().includes(currentSearch);
         const schedMatch = (item.schedule || '').toLowerCase().includes(currentSearch);
         const srcMatch = (item.source || '').toLowerCase().includes(currentSearch);
-        return nameMatch || descMatch || actMatch || cmdMatch || schedMatch || srcMatch;
+        return nameMatch || rawMatch || descMatch || actMatch || cmdMatch || schedMatch || srcMatch;
       }
       return true;
     });
   };
 
-  const filteredFailed = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'failed') 
+  const filteredFailed = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'failed')
     ? filterBySearchAndStatus(failed_units, 'failed') : [];
-  const filteredTimers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'timers') 
+  const filteredTimers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'timers')
     ? filterBySearchAndStatus(system_timers, 'timer') : [];
-  const filteredCron = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'cron') 
+  const filteredCron = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'cron')
     ? filterBySearchAndStatus(cron_jobs, 'cron') : [];
-  const filteredWatchers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'watchers') 
+  const filteredWatchers = (currentSysCategoryFilter === 'all' || currentSysCategoryFilter === 'watchers')
     ? filterBySearchAndStatus(watchers, 'watcher') : [];
 
   const totalFiltered = filteredFailed.length + filteredTimers.length + filteredCron.length + filteredWatchers.length;
 
   if (totalFiltered === 0) {
-    let resetBtn = '';
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'empty-state';
+    emptyDiv.append('No matching system tasks, timers, or watchers found.');
     if (currentSysCategoryFilter !== 'all') {
-      resetBtn = `<br><button class="btn btn-secondary btn-sm" id="btn-empty-clear-sys-cat" style="margin-top: 10px;">Show All System Tasks</button>`;
+      emptyDiv.appendChild(document.createElement('br'));
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'btn btn-secondary btn-sm';
+      clearBtn.style.marginTop = '10px';
+      clearBtn.dataset.uiAction = 'clear-system-category';
+      clearBtn.textContent = 'Show All System Tasks';
+      emptyDiv.appendChild(clearBtn);
     }
-    container.innerHTML = `<div class="empty-state">No matching system tasks, timers, or watchers found.${resetBtn}</div>`;
-    const clearBtn = document.getElementById('btn-empty-clear-sys-cat');
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        currentSysCategoryFilter = 'all';
-        updateSystemStatCardActiveState();
-        renderContent();
-      });
-    }
+    container.appendChild(emptyDiv);
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   let isFirst = true;
 
-  // 1. Failed / Degraded Units Section
   if (filteredFailed.length > 0) {
     const sec = createSystemSection("Failed / Degraded Units", filteredFailed.length, 'danger', isFirst);
     isFirst = false;
     sec.appendChild(renderFailedUnitsTable(filteredFailed));
-    container.appendChild(sec);
+    fragment.appendChild(sec);
   }
 
-  // 2. System Timers Section
   if (filteredTimers.length > 0) {
     const sec = createSystemSection("System Timers", filteredTimers.length, '', isFirst);
     isFirst = false;
     sec.appendChild(renderSystemTimersTable(filteredTimers));
-    container.appendChild(sec);
+    fragment.appendChild(sec);
   }
 
-  // 3. Cron Jobs Section
   if (filteredCron.length > 0) {
     const editPillHtml = `
-      <button type="button" class="cron-quick-pill" onclick="copyEditCommand('crontab -e')" title="Click to copy 'crontab -e' to clipboard">
+      <button type="button" class="cron-quick-pill" data-ui-action="copy-cmd" data-copy="crontab -e" title="Click to copy 'crontab -e' to clipboard">
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -816,16 +873,17 @@ function renderSystemView() {
     const sec = createSystemSection("Cron Jobs & Scheduled Scripts", filteredCron.length, '', isFirst, '', editPillHtml);
     isFirst = false;
     sec.appendChild(renderCronJobsTable(filteredCron));
-    container.appendChild(sec);
+    fragment.appendChild(sec);
   }
 
-  // 4. Watchers & Sockets Section
   if (filteredWatchers.length > 0) {
     const sec = createSystemSection("Sockets & Path Watchers", filteredWatchers.length, '', isFirst);
     isFirst = false;
     sec.appendChild(renderWatchersTable(filteredWatchers));
-    container.appendChild(sec);
+    fragment.appendChild(sec);
   }
+
+  container.appendChild(fragment);
 }
 
 function createSystemSection(title, count, badgeTheme = '', isFirst = false, extraHeaderHtml = '', rightSideHtml = '') {
@@ -837,13 +895,12 @@ function createSystemSection(title, count, badgeTheme = '', isFirst = false, ext
     sec.classList.add('is-filtered');
   }
 
-  const badgeClass = 'category-badge';
-  const badgeStyle = badgeTheme === 'danger' ? 'background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3);' : '';
+  const badgeClass = badgeTheme === 'danger' ? 'category-badge category-badge-danger' : 'category-badge';
 
   let filterPillHtml = '';
   if (isFiltered) {
     filterPillHtml = `
-      <button class="category-filter-pill" id="btn-clear-sys-pill" title="Clear filter and show all system tasks">
+      <button type="button" class="category-filter-pill" data-ui-action="clear-system-category" title="Clear filter and show all system tasks">
         <span>Filtered</span>
         <span class="pill-close">&times;</span>
       </button>
@@ -861,7 +918,7 @@ function createSystemSection(title, count, badgeTheme = '', isFirst = false, ext
   header.innerHTML = `
     <div class="category-title-area">
       <h2 class="category-title">${escapeHtml(title)}</h2>
-      <span class="${badgeClass}" style="${badgeStyle}">${count}</span>
+      <span class="${badgeClass}">${count}</span>
       ${extraHeaderHtml || ''}
       ${filterPillHtml}
     </div>
@@ -870,15 +927,6 @@ function createSystemSection(title, count, badgeTheme = '', isFirst = false, ext
       ${lastScanHtml}
     </div>
   `;
-
-  const clearBtn = header.querySelector('#btn-clear-sys-pill');
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      currentSysCategoryFilter = 'all';
-      updateSystemStatCardActiveState();
-      renderContent();
-    });
-  }
 
   sec.appendChild(header);
   return sec;
@@ -894,10 +942,20 @@ function renderSystemTimersTable(items) {
     const statusClass = isWaiting ? 'active' : 'inactive';
     const statusLabel = escapeHtml(item.sub_state || item.active_state || 'waiting');
     const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const scopeVal = escapeHtml(item.scope || 'system');
 
     const targetService = item.activates ? `<div class="table-service-file">Activates: <code>${escapeHtml(item.activates)}</code></div>` : '';
-    const nextRun = item.next_str ? `<span style="color:var(--blue); font-size:0.8rem;">${escapeHtml(item.next_str)}</span>${item.left_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.left_str)}</div>` : ''}` : '-';
-    const lastRun = item.last_str ? `<span style="font-size:0.8rem; color:var(--text-main);">${escapeHtml(item.last_str)}</span>${item.passed_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.passed_str)}</div>` : ''}` : 'Never';
+    const hasNext = Boolean(item.next_str && item.next_str !== 'n/a');
+    const nextRun = hasNext
+      ? `<span style="color:var(--blue); font-size:0.8rem;">${escapeHtml(item.next_str)}</span>${item.left_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.left_str)}</div>` : ''}`
+      : '-';
+    const hasLast = Boolean(item.last_str && item.last_str !== '-');
+    const lastRun = hasLast
+      ? `<span style="font-size:0.8rem; color:var(--text-main);">${escapeHtml(item.last_str)}</span>${item.passed_str ? `<div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(item.passed_str)}</div>` : ''}`
+      : 'Never';
+
+    const logsTarget = escapeHtml(item.activates || item.name);
+    const timerName = escapeHtml(item.name);
 
     rows += `
       <tr>
@@ -908,17 +966,17 @@ function renderSystemTimersTable(items) {
           </span>
         </td>
         <td>
-          <div class="table-service-name font-mono">${escapeHtml(item.name)}</div>
+          <div class="table-service-name font-mono">${escapeHtml(item.display_name || item.name)}</div>
           ${targetService}
         </td>
-        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${scopeVal}</span></td>
         <td style="width: 170px;">${nextRun}</td>
         <td style="width: 170px;">${lastRun}</td>
         <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
         <td style="width: 160px; text-align: right;">
           <div class="table-actions">
-            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.activates || item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
-            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-logs" data-unit="${logsTarget}" data-scope="${scopeVal}">Logs</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-inspect" data-unit="${timerName}" data-scope="${scopeVal}">Inspect</button>
           </div>
         </td>
       </tr>
@@ -1030,7 +1088,9 @@ function renderWatchersTable(items) {
     const statusClass = isActive ? 'active' : 'inactive';
     const statusLabel = escapeHtml(item.sub_state || item.active_state || 'active');
     const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const scopeVal = escapeHtml(item.scope || 'system');
     const typeLabel = (item.type || 'watcher').toUpperCase();
+    const rawUnit = escapeHtml(item.name);
 
     rows += `
       <tr>
@@ -1041,15 +1101,15 @@ function renderWatchersTable(items) {
           </span>
         </td>
         <td>
-          <div class="table-service-name font-mono">${escapeHtml(item.name)}</div>
+          <div class="table-service-name font-mono">${escapeHtml(item.display_name || item.name)}</div>
         </td>
         <td style="width: 90px;"><span class="engine-badge engine-podman">${escapeHtml(typeLabel)}</span></td>
-        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${scopeVal}</span></td>
         <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
         <td style="width: 160px; text-align: right;">
           <div class="table-actions">
-            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
-            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-logs" data-unit="${rawUnit}" data-scope="${scopeVal}">Logs</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-inspect" data-unit="${rawUnit}" data-scope="${scopeVal}">Inspect</button>
           </div>
         </td>
       </tr>
@@ -1081,26 +1141,28 @@ function renderFailedUnitsTable(items) {
   let rows = '';
   items.forEach(item => {
     const scopeClass = item.scope === 'system' ? 'scope-system' : 'scope-user';
+    const scopeVal = escapeHtml(item.scope || 'system');
     const subLabel = escapeHtml(item.sub || item.active || 'failed');
+    const rawUnit = escapeHtml(item.name);
 
     rows += `
       <tr>
         <td style="width: 130px;">
-          <span class="status-badge inactive" style="color:var(--danger); border-color:rgba(239, 68, 68, 0.4);">
-            <span class="status-dot" style="background:var(--danger); box-shadow:0 0 6px var(--danger);"></span>
+          <span class="status-badge failed">
+            <span class="status-dot"></span>
             FAILED
           </span>
         </td>
         <td>
-          <div class="table-service-name font-mono" style="color:var(--danger); font-weight:600;">${escapeHtml(item.name)}</div>
+          <div class="table-service-name font-mono" style="color:var(--danger); font-weight:600;">${escapeHtml(item.display_name || item.name)}</div>
         </td>
-        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${escapeHtml(item.scope || 'system')}</span></td>
+        <td style="width: 80px;"><span class="scope-badge ${scopeClass}">${scopeVal}</span></td>
         <td style="width: 100px;"><span class="file-path-badge" style="color:var(--danger);">${subLabel}</span></td>
         <td class="table-desc" title="${escapeHtml(item.description || '')}">${escapeHtml(item.description || '-')}</td>
         <td style="width: 160px; text-align: right;">
           <div class="table-actions">
-            <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Logs</button>
-            <button class="btn btn-sm btn-secondary" onclick="openInspectModal('${escapeHtml(item.name)}', '${escapeHtml(item.scope || 'system')}')">Inspect</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-logs" data-unit="${rawUnit}" data-scope="${scopeVal}">Logs</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-ui-action="open-inspect" data-unit="${rawUnit}" data-scope="${scopeVal}">Inspect</button>
           </div>
         </td>
       </tr>
@@ -1125,123 +1187,59 @@ function renderFailedUnitsTable(items) {
   return wrapper;
 }
 
-function createCardElement(item) {
-  const card = document.createElement('div');
-  card.className = 'service-card';
-
-  const isRunning = item.activeState === 'active';
-  let statusClass = isRunning ? 'active' : 'inactive';
-  let statusText = isRunning ? 'Running' : (item.timer ? 'Timer Scheduled' : item.activeState);
-
-  let typeLabel = item.timer ? 'Timer' : 'Service';
-  let typePillClass = '';
-  if (item.itemType === 'quadlet') {
-    typeLabel = 'Quadlet';
-    typePillClass = 'engine-podman';
-  } else if (item.itemType === 'container') {
-    typeLabel = item.engine === 'docker' ? 'Docker' : 'Podman';
-    typePillClass = item.engine === 'docker' ? 'engine-docker' : 'engine-podman';
-  } else if (item.engine) {
-    typePillClass = item.engine === 'docker' ? 'engine-docker' : 'engine-podman';
-  }
-
-  let metaHtml = '';
-  if (item.timer) {
-    const nextText = item.timer.next_str ? `Next: ${item.timer.next_str}` : (item.timer.left_str ? `Left: ${item.timer.left_str}` : 'Scheduled');
-    const scheduleRule = item.timer.schedule ? ` (${item.timer.schedule})` : '';
-    metaHtml += `
-      <div class="meta-chip timer-chip">
-        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <span>${escapeHtml(nextText)}${escapeHtml(scheduleRule)}</span>
-      </div>
-    `;
-  }
-
-  if (item.port) {
-    metaHtml += `
-      <div class="meta-chip web-chip">
-        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-        <a href="http://localhost:${item.port}" target="_blank" rel="noopener noreferrer">
-          Open Web UI (:${item.port}) &nearr;
-        </a>
-      </div>
-    `;
-  }
-
-  let actionButtonsHtml = '';
-  if (item.itemType === 'service' || item.itemType === 'quadlet') {
-    actionButtonsHtml = `
-      <div class="action-group-left">
-        ${isRunning 
-          ? `<button class="btn btn-sm btn-danger-soft" onclick="performAction('${item.name}', 'stop')">Stop</button>`
-          : `<button class="btn btn-sm btn-success-soft" onclick="performAction('${item.name}', 'start')">Start</button>`
-        }
-        <button class="btn btn-sm btn-secondary" onclick="performAction('${item.name}', 'restart')">Restart</button>
-      </div>
-      <div class="action-group-right">
-        <button class="btn btn-sm btn-secondary" onclick="openLogsModal('${item.name}')">Logs</button>
-        <button class="btn btn-sm btn-primary" onclick="openEditorModal('${item.name}')">Edit</button>
-      </div>
-    `;
-  } else {
-    actionButtonsHtml = `
-      <div class="action-group-left">
-        <span class="file-path-badge">${escapeHtml(item.subState)}</span>
-      </div>
-      <div class="action-group-right">
-        ${item.port ? `<a class="btn btn-sm btn-primary" href="http://localhost:${item.port}" target="_blank">Open UI</a>` : ''}
-      </div>
-    `;
-  }
-
-  card.innerHTML = `
-    <div>
-      <div class="card-top">
-        <div class="card-title-group">
-          <div class="service-title">${escapeHtml(item.displayName)}</div>
-          <div class="service-filename">${escapeHtml(item.name)}</div>
-        </div>
-        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
-          <span class="status-badge ${statusClass}">
-            <span class="status-dot"></span>
-            ${statusText}
-          </span>
-          <span class="type-pill ${typePillClass}">${typeLabel}</span>
-        </div>
-      </div>
-      <div class="service-desc">${escapeHtml(item.description)}</div>
-      <div class="card-meta-bar">${metaHtml}</div>
-    </div>
-    <div class="card-actions">${actionButtonsHtml}</div>
-  `;
-
-  return card;
-}
-
 // Service Actions (Start / Stop / Restart)
 async function performAction(unitName, action) {
   try {
     showToast(`Sending ${action} command to ${unitName}...`);
-    const res = await fetch(`/api/service/${unitName}/action`, {
+    const res = await fetch(`/api/service/${encodeURIComponent(unitName)}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action })
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || `Action failed`);
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Action failed');
     }
     showToast(`Successfully performed ${action} on ${unitName}!`);
-    loadData();
+    loadData({ servicesOnly: true });
   } catch (err) {
     console.error('Service action error:', err);
     showToast(`Failed: ${err.message}`, 'error');
   }
 }
 
-// Editor Modal
+// Editor / Inspect Modal
+function resetEditorModalState() {
+  if (editorCloseTimer) {
+    clearTimeout(editorCloseTimer);
+    editorCloseTimer = null;
+  }
+  if (editorFetchController) {
+    editorFetchController.abort();
+    editorFetchController = null;
+  }
+  const textarea = document.getElementById('editor-textarea');
+  const saveBtn = document.getElementById('btn-save-editor');
+  const saveRestartBtn = document.getElementById('btn-save-restart-editor');
+  const cancelBtn = document.getElementById('btn-cancel-editor');
+  if (textarea) textarea.readOnly = false;
+  if (saveBtn) {
+    saveBtn.style.display = '';
+    saveBtn.disabled = false;
+  }
+  if (saveRestartBtn) {
+    saveRestartBtn.style.display = '';
+    saveRestartBtn.disabled = false;
+  }
+  if (cancelBtn) cancelBtn.textContent = 'Cancel';
+}
+
 async function openEditorModal(unitName) {
+  resetEditorModalState();
   currentEditingUnit = unitName;
+  editorFetchController = new AbortController();
+  const { signal } = editorFetchController;
+
   const modal = document.getElementById('editor-modal');
   const title = document.getElementById('editor-title');
   const pathBadge = document.getElementById('editor-file-path');
@@ -1250,17 +1248,23 @@ async function openEditorModal(unitName) {
 
   banner.className = 'banner hidden';
   title.textContent = `Edit ${unitName}`;
+  pathBadge.textContent = 'Loading path...';
   textarea.value = 'Loading file contents...';
   modal.classList.add('open');
 
   try {
-    const res = await fetch(`/api/service/${unitName}/file`);
-    if (!res.ok) throw new Error(`Could not load unit file`);
+    const res = await fetch(`/api/service/${encodeURIComponent(unitName)}/file`, { signal });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Could not load unit file (HTTP ${res.status})`);
+    }
     const data = await res.json();
+    if (signal.aborted) return;
     pathBadge.textContent = data.file_path;
     textarea.value = data.content;
     textarea.focus();
   } catch (err) {
+    if (err && err.name === 'AbortError') return;
     console.error('Error fetching unit file:', err);
     textarea.value = `Error loading file: ${err.message}`;
   }
@@ -1269,21 +1273,15 @@ async function openEditorModal(unitName) {
 function closeEditorModal() {
   document.getElementById('editor-modal').classList.remove('open');
   currentEditingUnit = null;
-
-  // Reset editor modal controls in case it was opened in inspect mode
-  const textarea = document.getElementById('editor-textarea');
-  const saveBtn = document.getElementById('btn-save-editor');
-  const saveRestartBtn = document.getElementById('btn-save-restart-editor');
-  const cancelBtn = document.getElementById('btn-cancel-editor');
-
-  if (textarea) textarea.readOnly = false;
-  if (saveBtn) saveBtn.style.display = '';
-  if (saveRestartBtn) saveRestartBtn.style.display = '';
-  if (cancelBtn) cancelBtn.textContent = 'Cancel';
+  resetEditorModalState();
 }
 
 async function openInspectModal(unitName, scope = 'system') {
+  resetEditorModalState();
   currentEditingUnit = null;
+  editorFetchController = new AbortController();
+  const { signal } = editorFetchController;
+
   const modal = document.getElementById('editor-modal');
   const title = document.getElementById('editor-title');
   const pathBadge = document.getElementById('editor-file-path');
@@ -1306,11 +1304,19 @@ async function openInspectModal(unitName, scope = 'system') {
   modal.classList.add('open');
 
   try {
-    const res = await fetch(`/api/system-unit/${encodeURIComponent(unitName)}/cat?scope=${encodeURIComponent(scope)}`);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const res = await fetch(
+      `/api/system-unit/${encodeURIComponent(unitName)}/cat?scope=${encodeURIComponent(scope)}`,
+      { signal }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP error ${res.status}`);
+    }
     const data = await res.json();
+    if (signal.aborted) return;
     textarea.value = data.content || 'No definition returned.';
   } catch (err) {
+    if (err && err.name === 'AbortError') return;
     console.error('Error fetching unit inspection:', err);
     textarea.value = `Error loading unit definition: ${err.message}`;
   }
@@ -1318,6 +1324,7 @@ async function openInspectModal(unitName, scope = 'system') {
 
 async function saveUnitFile(restartAfter) {
   if (!currentEditingUnit) return;
+  const targetUnit = currentEditingUnit;
   const textarea = document.getElementById('editor-textarea');
   const banner = document.getElementById('editor-banner');
   const saveBtn = document.getElementById('btn-save-editor');
@@ -1328,7 +1335,7 @@ async function saveUnitFile(restartAfter) {
   banner.className = 'banner hidden';
 
   try {
-    const res = await fetch(`/api/service/${currentEditingUnit}/file`, {
+    const res = await fetch(`/api/service/${encodeURIComponent(targetUnit)}/file`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1337,17 +1344,21 @@ async function saveUnitFile(restartAfter) {
       })
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Save failed');
     }
     const result = await res.json();
     banner.className = 'banner success';
     banner.textContent = `File saved successfully! (Backup: ${result.backup})${result.restarted ? ' Service restarted.' : ''}`;
     banner.classList.remove('hidden');
-    showToast(`Saved ${currentEditingUnit}!`);
-    loadData();
-    setTimeout(() => {
-      closeEditorModal();
+    showToast(`Saved ${targetUnit}!`);
+    loadData({ servicesOnly: true });
+    if (editorCloseTimer) clearTimeout(editorCloseTimer);
+    editorCloseTimer = setTimeout(() => {
+      editorCloseTimer = null;
+      if (currentEditingUnit === targetUnit) {
+        closeEditorModal();
+      }
     }, 1200);
   } catch (err) {
     banner.className = 'banner error';
@@ -1377,46 +1388,73 @@ async function openLogsModal(unitName, scope = 'user') {
 }
 
 function closeLogsModal() {
+  if (logsFetchController) {
+    logsFetchController.abort();
+    logsFetchController = null;
+  }
   document.getElementById('logs-modal').classList.remove('open');
   currentLogsUnit = null;
 }
 
 async function refreshLogs() {
   if (!currentLogsUnit) return;
+  if (logsFetchController) {
+    logsFetchController.abort();
+  }
+  logsFetchController = new AbortController();
+  const { signal } = logsFetchController;
+
   const terminal = document.getElementById('logs-terminal');
   try {
-    const res = await fetch(`/api/service/${encodeURIComponent(currentLogsUnit)}/logs?lines=100&scope=${encodeURIComponent(currentLogsScope)}`);
-    if (!res.ok) throw new Error('Could not fetch logs');
+    const res = await fetch(
+      `/api/service/${encodeURIComponent(currentLogsUnit)}/logs?lines=100&scope=${encodeURIComponent(currentLogsScope)}`,
+      { signal }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Could not fetch logs (HTTP ${res.status})`);
+    }
     const data = await res.json();
+    if (signal.aborted) return;
     terminal.textContent = data.logs || 'No journal log entries found for this service.';
     terminal.scrollTop = terminal.scrollHeight;
   } catch (err) {
+    if (err && err.name === 'AbortError') return;
     terminal.textContent = `Error fetching logs: ${err.message}`;
   }
 }
 
 function copyLogsToClipboard() {
   const terminal = document.getElementById('logs-terminal');
-  navigator.clipboard.writeText(terminal.textContent).then(() => {
-    showToast('Logs copied to clipboard!');
-  }).catch(() => {
-    showToast('Failed to copy logs', 'error');
-  });
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(terminal.textContent).then(() => {
+      showToast('Logs copied to clipboard!');
+    }).catch(() => {
+      fallbackCopyText(terminal.textContent);
+    });
+  } else {
+    fallbackCopyText(terminal.textContent);
+  }
 }
 
 // Toast
 function showToast(message, type = 'info') {
   const toast = document.getElementById('toast');
+  if (!toast) return;
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+  }
   toast.textContent = message;
   toast.style.borderColor = type === 'error' ? 'var(--danger)' : 'var(--primary)';
   toast.style.display = 'block';
-  setTimeout(() => {
+  toastTimer = setTimeout(() => {
     toast.style.display = 'none';
+    toastTimer = null;
   }, 3000);
 }
 
 function escapeHtml(str) {
-  if (!str) return '';
+  if (str === null || str === undefined) return '';
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1426,7 +1464,7 @@ function escapeHtml(str) {
 }
 
 /* ==========================================================================
-   Settings, Themes & Integration System (AppIndex Model)
+   Settings, Themes & Integration System
    ========================================================================== */
 
 const STORAGE_KEY = "podman_dashboard_settings_v1";
@@ -1575,7 +1613,16 @@ const COLOR_PICKER_MAP = [
   { inputId: "color-text-primary", hexId: "hex-text-primary", varName: "--text-primary" },
   { inputId: "color-text-muted", hexId: "hex-text-muted", varName: "--text-muted" },
   { inputId: "color-accent-blue", hexId: "hex-accent-blue", varName: "--accent-blue" },
-  { inputId: "color-accent-purple", hexId: "hex-accent-purple", varName: "--accent-purple" },
+  { inputId: "color-accent-purple", hexId: "hex-accent-purple", varName: "--accent-purple" }
+];
+
+const THEME_STYLE_VARS = [
+  "--bg-primary", "--bg-secondary", "--bg-card", "--bg-card-hover", "--border-color",
+  "--text-primary", "--text-secondary", "--text-muted",
+  "--accent-blue", "--accent-purple", "--accent-orange", "--accent-green", "--accent-red",
+  "--bg-base", "--bg-surface", "--text-main", "--primary", "--primary-hover",
+  "--accent", "--accent-hover", "--success", "--warning", "--danger",
+  "--on-primary", "--on-accent"
 ];
 
 let userSettings = {
@@ -1592,8 +1639,45 @@ let userSettings = {
 };
 
 let appUpdateData = null;
-let cachedAppVersion = "v1.2.3";
+let cachedAppVersion = "v1.2.5";
 let cachedGithubRepo = "PlasmaDrifter/Services-dashboard";
+
+function sanitizeHttpUrl(rawUrl, fallback = "http://localhost:8765") {
+  if (!rawUrl || typeof rawUrl !== "string") return fallback;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString().replace(/\/$/, "") === rawUrl.trim() ? rawUrl.trim() : parsed.href;
+    }
+  } catch (_) {
+    // Fall back on invalid URL
+  }
+  return fallback;
+}
+
+function getContrastTextColor(hexColor) {
+  const hex = normalizeHex(hexColor).slice(1);
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const toLinear = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const lum = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+  return lum > 0.34 ? "#181926" : "#ffffff";
+}
+
+function shiftHexColor(hexColor, delta) {
+  const hex = normalizeHex(hexColor).slice(1);
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  const r = clamp(parseInt(hex.slice(0, 2), 16) + delta).toString(16).padStart(2, "0");
+  const g = clamp(parseInt(hex.slice(2, 4), 16) + delta).toString(16).padStart(2, "0");
+  const b = clamp(parseInt(hex.slice(4, 6), 16) + delta).toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
+}
+
+function computeHoverColor(cardHex) {
+  const contrast = getContrastTextColor(cardHex);
+  return contrast === "#ffffff" ? shiftHexColor(cardHex, 12) : shiftHexColor(cardHex, -12);
+}
 
 function loadSavedSettings() {
   let hasLocalSettings = false;
@@ -1610,7 +1694,7 @@ function loadSavedSettings() {
         savedCustomThemes: parsed.savedCustomThemes || {},
         showAppIndexLink: Boolean(parsed.showAppIndexLink),
         openAppIndexInSameTab: Boolean(parsed.openAppIndexInSameTab),
-        appIndexUrl: parsed.appIndexUrl || "http://localhost:8765",
+        appIndexUrl: sanitizeHttpUrl(parsed.appIndexUrl),
         showGitHubBtn: parsed.showGitHubBtn !== undefined ? Boolean(parsed.showGitHubBtn) : true,
         checkForUpdates: parsed.checkForUpdates !== undefined ? Boolean(parsed.checkForUpdates) : true
       };
@@ -1619,17 +1703,16 @@ function loadSavedSettings() {
     console.warn("Could not load settings from localStorage:", err);
   }
 
-  // Asynchronously sync with backend metadata/settings
+  // Sync companion/update settings and app version with backend
   fetch("/api/settings")
-    .then((r) => r.json())
+    .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       if (data && data.status === "ok") {
         if (data.app_version) {
           cachedAppVersion = data.app_version;
+          const formattedVer = cachedAppVersion.startsWith("v") ? cachedAppVersion : `v${cachedAppVersion}`;
           const headerVer = document.getElementById("header-app-version");
-          if (headerVer) {
-            headerVer.textContent = cachedAppVersion.startsWith("v") ? cachedAppVersion : `v${cachedAppVersion}`;
-          }
+          if (headerVer) headerVer.textContent = formattedVer;
         }
         if (data.github_repo) cachedGithubRepo = data.github_repo;
         const s = data.settings || {};
@@ -1637,12 +1720,10 @@ function loadSavedSettings() {
         let needsSaveToLocal = false;
         let needsSaveToBackend = false;
 
-        // If backend explicitly has show_appindex_link = true, adopt it
         if (s.show_appindex_link === true && !userSettings.showAppIndexLink) {
           userSettings.showAppIndexLink = true;
           needsSaveToLocal = true;
         } else if (userSettings.showAppIndexLink && s.show_appindex_link !== true) {
-          // If local explicitly has it enabled but backend does not, sync local setting to backend
           needsSaveToBackend = true;
         }
 
@@ -1654,7 +1735,7 @@ function loadSavedSettings() {
         }
 
         if (s.appindex_url && s.appindex_url !== "http://localhost:8765" && userSettings.appIndexUrl === "http://localhost:8765") {
-          userSettings.appIndexUrl = s.appindex_url;
+          userSettings.appIndexUrl = sanitizeHttpUrl(s.appindex_url);
           needsSaveToLocal = true;
         }
 
@@ -1669,18 +1750,17 @@ function loadSavedSettings() {
         }
 
         if (needsSaveToLocal) {
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(userSettings));
-          } catch (e) {}
+          saveLocalSettings();
         }
-
         if (needsSaveToBackend) {
-          saveSettingsToStorage();
+          saveBackendSettings();
         }
 
         if (data.update_info) {
           appUpdateData = data.update_info;
           renderUpdateUI(appUpdateData);
+        } else {
+          renderUpdateUI(null);
         }
         applyAllActiveSettings();
         syncSettingsUI();
@@ -1689,14 +1769,15 @@ function loadSavedSettings() {
     .catch(() => {});
 }
 
-function saveSettingsToStorage() {
+function saveLocalSettings() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(userSettings));
   } catch (err) {
     console.warn("Could not save settings to localStorage:", err);
   }
+}
 
-  // Persist companion and integration settings to backend metadata
+function saveBackendSettings() {
   fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1706,15 +1787,21 @@ function saveSettingsToStorage() {
       check_for_updates: userSettings.checkForUpdates,
       show_appindex_link: userSettings.showAppIndexLink,
       open_appindex_same_tab: userSettings.openAppIndexInSameTab,
-      appindex_url: userSettings.appIndexUrl
+      appindex_url: sanitizeHttpUrl(userSettings.appIndexUrl)
     })
   }).catch((err) => {
     console.warn("Could not save settings to backend:", err);
   });
 }
 
+function saveSettingsToStorage(syncBackend = true) {
+  saveLocalSettings();
+  if (syncBackend) {
+    saveBackendSettings();
+  }
+}
+
 function applyAllActiveSettings() {
-  // Apply Theme
   if (userSettings.themeId === "custom" && userSettings.customColors) {
     applyThemeColors(userSettings.customColors);
   } else if (PRESET_THEMES[userSettings.themeId]) {
@@ -1725,43 +1812,36 @@ function applyAllActiveSettings() {
     applyThemeColors(PRESET_THEMES["catppuccin"].colors);
   }
 
-  // Apply Density
   applyDensity(userSettings.density);
-
-  // Apply Font Scale
   applyFontScale(userSettings.fontScale);
-
-  // Apply AppIndex Companion Nav Link
   applyAppIndexNav();
-
-  // Apply GitHub Nav Button
   applyGitHubNav();
 }
 
 function applyThemeColors(colorsObj) {
   if (!colorsObj) return;
   const root = document.documentElement;
-  const savedFontScale = root.style.getPropertyValue("--font-scale");
-  root.removeAttribute("style");
-  if (savedFontScale) {
-    root.style.setProperty("--font-scale", savedFontScale);
-  }
+  THEME_STYLE_VARS.forEach((prop) => root.style.removeProperty(prop));
 
   for (const [key, val] of Object.entries(colorsObj)) {
     root.style.setProperty(key, val);
   }
 
-  // Sync dashboard theme aliases
   if (colorsObj["--bg-primary"]) root.style.setProperty("--bg-base", colorsObj["--bg-primary"]);
   if (colorsObj["--bg-secondary"]) root.style.setProperty("--bg-surface", colorsObj["--bg-secondary"]);
   if (colorsObj["--text-primary"]) root.style.setProperty("--text-main", colorsObj["--text-primary"]);
+  if (colorsObj["--bg-card"] && !colorsObj["--bg-card-hover"]) {
+    root.style.setProperty("--bg-card-hover", computeHoverColor(colorsObj["--bg-card"]));
+  }
   if (colorsObj["--accent-blue"]) {
     root.style.setProperty("--primary", colorsObj["--accent-blue"]);
     root.style.setProperty("--primary-hover", colorsObj["--accent-blue"]);
+    root.style.setProperty("--on-primary", getContrastTextColor(colorsObj["--accent-blue"]));
   }
   if (colorsObj["--accent-purple"]) {
     root.style.setProperty("--accent", colorsObj["--accent-purple"]);
     root.style.setProperty("--accent-hover", colorsObj["--accent-purple"]);
+    root.style.setProperty("--on-accent", getContrastTextColor(colorsObj["--accent-purple"]));
   }
   if (colorsObj["--accent-green"]) root.style.setProperty("--success", colorsObj["--accent-green"]);
   if (colorsObj["--accent-orange"]) root.style.setProperty("--warning", colorsObj["--accent-orange"]);
@@ -1784,7 +1864,7 @@ function applyAppIndexNav() {
   if (!link) return;
   const show = Boolean(userSettings.showAppIndexLink);
   link.style.display = show ? "inline-flex" : "none";
-  link.href = userSettings.appIndexUrl || "http://localhost:8765";
+  link.href = sanitizeHttpUrl(userSettings.appIndexUrl);
 
   const arrow = link.querySelector(".nav-external-arrow");
   if (userSettings.openAppIndexInSameTab) {
@@ -1813,7 +1893,7 @@ function checkAppUpdatesAsync(force = false) {
 
   const url = force ? "/api/check-update?force=1" : "/api/check-update";
   fetch(url, { method: force ? "POST" : "GET" })
-    .then((r) => r.json())
+    .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       if (data && data.update_info) {
         appUpdateData = data.update_info;
@@ -1828,7 +1908,8 @@ function checkAppUpdatesAsync(force = false) {
 function parseVersionString(v) {
   if (!v) return [];
   const cleaned = String(v).trim().replace(/^[vV]/, '');
-  return cleaned.split(/[-.+_]/).map((p) => parseInt(p, 10)).filter((n) => !isNaN(n));
+  const base = cleaned.split(/-(?:alpha|beta|rc|dev|pre)/i)[0];
+  return base.split(/[-.+_]/).map((p) => parseInt(p, 10)).filter((n) => !isNaN(n));
 }
 
 function isNewerVersionString(latest, current) {
@@ -1851,18 +1932,15 @@ function renderUpdateUI(info) {
   const banner = document.getElementById("settings-update-banner");
   const bannerVer = document.getElementById("update-banner-version");
   const bannerLink = document.getElementById("update-banner-link");
+  const bannerCodeLink = document.getElementById("update-banner-code-link");
   const btnSettings = document.getElementById("btn-settings");
 
   const headerVer = document.getElementById("header-app-version");
   const settingsVer = document.getElementById("settings-app-version");
-  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.3");
+  const curVer = (info && info.current_version) ? info.current_version : (cachedAppVersion || "v1.2.5");
   const formattedVer = curVer.startsWith("v") ? curVer : `v${curVer}`;
-  if (settingsVer) {
-    settingsVer.textContent = formattedVer;
-  }
-  if (headerVer) {
-    headerVer.textContent = formattedVer;
-  }
+  if (settingsVer) settingsVer.textContent = formattedVer;
+  if (headerVer) headerVer.textContent = formattedVer;
 
   if (!userSettings.checkForUpdates) {
     clearUpdateIndicator();
@@ -1884,7 +1962,7 @@ function renderUpdateUI(info) {
     if (ghLink) {
       ghLink.classList.remove("has-update");
       ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-      ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.3'})`;
+      ghLink.title = `GitHub Repository (${formattedVer})`;
     }
 
     if (btnSettings) {
@@ -1900,17 +1978,18 @@ function renderUpdateUI(info) {
       if (statusBadge) {
         statusBadge.style.display = "inline-block";
         statusBadge.textContent = `${cleanVer} available`;
-        if (info.release_url) {
-          statusBadge.onclick = () => window.open(info.release_url, "_blank");
-        }
+        statusBadge.onclick = info.release_url
+          ? () => window.open(sanitizeHttpUrl(info.release_url, "https://github.com/PlasmaDrifter/Services-dashboard/releases"), "_blank", "noopener,noreferrer")
+          : null;
       }
       if (banner) {
         banner.style.display = "flex";
         if (bannerVer) bannerVer.textContent = cleanVer;
-        if (bannerLink && info.release_url) bannerLink.href = info.release_url;
-        const bannerCodeLink = document.getElementById("update-banner-code-link");
+        if (bannerLink && info.release_url) {
+          bannerLink.href = sanitizeHttpUrl(info.release_url, "https://github.com/PlasmaDrifter/Services-dashboard/releases");
+        }
         if (bannerCodeLink) {
-          bannerCodeLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}/tree/${cleanVer}`;
+          bannerCodeLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}/tree/${encodeURIComponent(cleanVer)}`;
         }
       }
     } else {
@@ -1933,13 +2012,11 @@ function clearUpdateIndicator() {
   const banner = document.getElementById("settings-update-banner");
   const btnSettings = document.getElementById("btn-settings");
 
-  if (btnSettings) {
-    btnSettings.title = "Application Settings";
-  }
+  if (btnSettings) btnSettings.title = "Application Settings";
   if (ghLink) {
     ghLink.classList.remove("has-update");
     ghLink.href = `https://github.com/${cachedGithubRepo || 'PlasmaDrifter/Services-dashboard'}`;
-    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.3'})`;
+    ghLink.title = `GitHub Repository (${cachedAppVersion || 'v1.2.5'})`;
   }
   if (navBadge) {
     navBadge.classList.add("hidden");
@@ -1947,10 +2024,9 @@ function clearUpdateIndicator() {
   }
   if (statusBadge) {
     statusBadge.style.display = "none";
+    statusBadge.onclick = null;
   }
-  if (banner) {
-    banner.style.display = "none";
-  }
+  if (banner) banner.style.display = "none";
 }
 
 async function executeSelfUpdate() {
@@ -1969,17 +2045,13 @@ async function executeSelfUpdate() {
     btnApply.style.borderColor = "var(--accent-orange, #f5a97f)";
     btnApply.style.cursor = "wait";
   }
-  if (btnDismiss) {
-    btnDismiss.style.display = "none";
-  }
+  if (btnDismiss) btnDismiss.style.display = "none";
 
   const progressModal = document.getElementById("update-progress-modal");
   const progressTitle = document.getElementById("update-progress-title");
   const progressDesc = document.getElementById("update-progress-desc");
 
-  if (progressModal) {
-    progressModal.style.display = "flex";
-  }
+  if (progressModal) progressModal.style.display = "flex";
 
   try {
     const res = await fetch("/api/apply-update", { method: "POST" });
@@ -1996,7 +2068,10 @@ async function executeSelfUpdate() {
     let reconnected = false;
     for (let i = 0; i < 40; i++) {
       try {
-        const ping = await fetch("/api/status", { cache: "no-store" });
+        const ping = await fetch("/api/status", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(2500)
+        });
         if (ping.ok) {
           reconnected = true;
           break;
@@ -2025,9 +2100,7 @@ async function executeSelfUpdate() {
           btnApply.innerHTML = origBtnContent;
           btnApply.style.cursor = "pointer";
         }
-        if (btnDismiss) {
-          btnDismiss.style.display = "";
-        }
+        if (btnDismiss) btnDismiss.style.display = "";
       }, 5000);
     }
   } catch (err) {
@@ -2037,10 +2110,8 @@ async function executeSelfUpdate() {
       btnApply.innerHTML = origBtnContent;
       btnApply.style.cursor = "pointer";
     }
-    if (btnDismiss) {
-      btnDismiss.style.display = "";
-    }
-    alert(`Update failed: ${err.message}`);
+    if (btnDismiss) btnDismiss.style.display = "";
+    showToast(`Update failed: ${err.message}`, 'error');
   }
 }
 
@@ -2052,7 +2123,6 @@ function initSettingsUI() {
 }
 
 function syncSettingsUI() {
-  // Sync Density Buttons
   const selector = document.getElementById("density-selector");
   if (selector) {
     selector.querySelectorAll(".density-btn").forEach((btn) => {
@@ -2060,13 +2130,11 @@ function syncSettingsUI() {
     });
   }
 
-  // Sync Font Scale
   const slider = document.getElementById("font-scale-slider");
   const valBadge = document.getElementById("font-scale-value");
   if (slider) slider.value = userSettings.fontScale;
   if (valBadge) valBadge.textContent = userSettings.fontScale + "%";
 
-  // Sync Color Pickers
   let currentColors = {};
   if (userSettings.themeId === "custom" && userSettings.customColors) {
     currentColors = userSettings.customColors;
@@ -2079,7 +2147,6 @@ function syncSettingsUI() {
   }
   updateColorPickersUI(currentColors);
 
-  // Highlight Active Theme Card
   const presetsGrid = document.getElementById("theme-presets-grid");
   if (presetsGrid) {
     presetsGrid.querySelectorAll(".theme-preset-card").forEach((card) => {
@@ -2087,7 +2154,6 @@ function syncSettingsUI() {
     });
   }
 
-  // Sync Companion Tools (AppIndex)
   const toggleAppIndex = document.getElementById("toggle-appindex-link");
   const toggleSameTab = document.getElementById("toggle-appindex-same-tab");
   const sameTabWrapper = document.getElementById("companion-same-tab-wrapper");
@@ -2096,65 +2162,16 @@ function syncSettingsUI() {
   const toggleGitHub = document.getElementById("toggle-github-btn");
   const toggleUpdates = document.getElementById("toggle-check-updates");
 
-  if (toggleGitHub) {
-    toggleGitHub.checked = Boolean(userSettings.showGitHubBtn);
-  }
-  if (toggleUpdates) {
-    toggleUpdates.checked = Boolean(userSettings.checkForUpdates);
-  }
+  if (toggleGitHub) toggleGitHub.checked = Boolean(userSettings.showGitHubBtn);
+  if (toggleUpdates) toggleUpdates.checked = Boolean(userSettings.checkForUpdates);
 
-  const statusBadge = document.getElementById("update-status-badge");
-  const banner = document.getElementById("settings-update-banner");
-  const bannerVer = document.getElementById("update-banner-version");
-  const bannerLink = document.getElementById("update-banner-link");
+  renderUpdateUI(appUpdateData);
 
-  const curVer = (appUpdateData && appUpdateData.current_version) ? appUpdateData.current_version : (cachedAppVersion || "v1.1.5");
-  const hasValidUpdate = Boolean(
-    userSettings.checkForUpdates &&
-    appUpdateData &&
-    appUpdateData.has_update &&
-    appUpdateData.latest_version &&
-    isNewerVersionString(appUpdateData.latest_version, curVer)
-  );
-
-  if (hasValidUpdate) {
-    const cleanVer = appUpdateData.latest_version.startsWith("v") ? appUpdateData.latest_version : `v${appUpdateData.latest_version}`;
-    const dismissedVer = localStorage.getItem("dashboard_dismissed_update_version");
-    const isDismissed = (dismissedVer === appUpdateData.latest_version);
-
-    if (!isDismissed) {
-      if (statusBadge) {
-        statusBadge.style.display = "inline-block";
-        statusBadge.textContent = `${cleanVer} available`;
-      }
-      if (banner) {
-        banner.style.display = "flex";
-        if (bannerVer) bannerVer.textContent = cleanVer;
-        if (bannerLink && appUpdateData.release_url) bannerLink.href = appUpdateData.release_url;
-      }
-    } else {
-      if (statusBadge) statusBadge.style.display = "none";
-      if (banner) banner.style.display = "none";
-    }
-  } else {
-    if (statusBadge) statusBadge.style.display = "none";
-    if (banner) banner.style.display = "none";
-  }
-
-  if (toggleAppIndex) {
-    toggleAppIndex.checked = Boolean(userSettings.showAppIndexLink);
-  }
-  if (toggleSameTab) {
-    toggleSameTab.checked = Boolean(userSettings.openAppIndexInSameTab);
-  }
+  if (toggleAppIndex) toggleAppIndex.checked = Boolean(userSettings.showAppIndexLink);
+  if (toggleSameTab) toggleSameTab.checked = Boolean(userSettings.openAppIndexInSameTab);
   if (sameTabWrapper) {
-    if (userSettings.showAppIndexLink) {
-      sameTabWrapper.classList.remove("toggle-disabled");
-      if (toggleSameTab) toggleSameTab.disabled = false;
-    } else {
-      sameTabWrapper.classList.add("toggle-disabled");
-      if (toggleSameTab) toggleSameTab.disabled = true;
-    }
+    sameTabWrapper.classList.toggle("toggle-disabled", !userSettings.showAppIndexLink);
+    if (toggleSameTab) toggleSameTab.disabled = !userSettings.showAppIndexLink;
   }
   if (appIndexUrlConfig) {
     appIndexUrlConfig.style.display = userSettings.showAppIndexLink ? "flex" : "none";
@@ -2167,7 +2184,7 @@ function syncSettingsUI() {
 function renderPresetThemeGrid() {
   const presetsGrid = document.getElementById("theme-presets-grid");
   if (!presetsGrid) return;
-  presetsGrid.innerHTML = "";
+  presetsGrid.replaceChildren();
 
   Object.entries(PRESET_THEMES).forEach(([themeId, theme]) => {
     const card = document.createElement("div");
@@ -2175,12 +2192,12 @@ function renderPresetThemeGrid() {
     card.dataset.themeId = themeId;
 
     const swatchesHtml = theme.swatches
-      .map((hex) => `<span class="theme-swatch-circle" style="background-color: ${hex};"></span>`)
+      .map((hex) => `<span class="theme-swatch-circle" style="background-color: ${escapeHtml(hex)};"></span>`)
       .join("");
 
     card.innerHTML = `
       <div class="theme-swatches">${swatchesHtml}</div>
-      <span class="theme-name" title="${theme.name}">${theme.name}</span>
+      <span class="theme-name" title="${escapeHtml(theme.name)}">${escapeHtml(theme.name)}</span>
     `;
 
     card.addEventListener("click", () => {
@@ -2188,7 +2205,7 @@ function renderPresetThemeGrid() {
       userSettings.customColors = null;
       applyThemeColors(theme.colors);
       updateColorPickersUI(theme.colors);
-      saveSettingsToStorage();
+      saveSettingsToStorage(false);
       syncSettingsUI();
       showToast(`Applied ${theme.name}`);
     });
@@ -2241,12 +2258,12 @@ function renderSavedCustomThemes() {
 
   if (names.length === 0) {
     customSection.style.display = "none";
-    list.innerHTML = "";
+    list.replaceChildren();
     return;
   }
 
   customSection.style.display = "block";
-  list.innerHTML = "";
+  list.replaceChildren();
 
   names.forEach((name) => {
     const chip = document.createElement("div");
@@ -2263,7 +2280,7 @@ function renderSavedCustomThemes() {
       const themeColors = userSettings.savedCustomThemes[name];
       applyThemeColors(themeColors);
       updateColorPickersUI(themeColors);
-      saveSettingsToStorage();
+      saveSettingsToStorage(false);
       syncSettingsUI();
       renderSavedCustomThemes();
       showToast(`Applied custom theme: ${name}`);
@@ -2276,7 +2293,7 @@ function renderSavedCustomThemes() {
         userSettings.themeId = "catppuccin";
         applyThemeColors(PRESET_THEMES["catppuccin"].colors);
       }
-      saveSettingsToStorage();
+      saveSettingsToStorage(false);
       syncSettingsUI();
       renderSavedCustomThemes();
       showToast(`Deleted theme: ${name}`);
@@ -2287,7 +2304,7 @@ function renderSavedCustomThemes() {
 }
 
 function bindSettingsInteractiveEvents() {
-  // Density selector buttons
+  // Density selector buttons (local only)
   const selector = document.getElementById("density-selector");
   if (selector) {
     selector.querySelectorAll(".density-btn").forEach((btn) => {
@@ -2295,13 +2312,13 @@ function bindSettingsInteractiveEvents() {
         const density = btn.dataset.density;
         userSettings.density = density;
         applyDensity(density);
-        saveSettingsToStorage();
+        saveSettingsToStorage(false);
         syncSettingsUI();
       });
     });
   }
 
-  // Font scale slider
+  // Font scale slider (local only, avoid spamming /api/settings while dragging)
   const slider = document.getElementById("font-scale-slider");
   const valBadge = document.getElementById("font-scale-value");
   if (slider) {
@@ -2310,7 +2327,9 @@ function bindSettingsInteractiveEvents() {
       userSettings.fontScale = val;
       applyFontScale(val);
       if (valBadge) valBadge.textContent = val + "%";
-      saveSettingsToStorage();
+    });
+    slider.addEventListener("change", () => {
+      saveSettingsToStorage(false);
     });
   }
 
@@ -2322,11 +2341,11 @@ function bindSettingsInteractiveEvents() {
       applyFontScale(val);
       if (slider) slider.value = val;
       if (valBadge) valBadge.textContent = val + "%";
-      saveSettingsToStorage();
+      saveSettingsToStorage(false);
     });
   });
 
-  // Color pickers input
+  // Color pickers input (local only; persist on change)
   COLOR_PICKER_MAP.forEach(({ inputId, hexId, varName }) => {
     const input = document.getElementById(inputId);
     const hexSpan = document.getElementById(hexId);
@@ -2344,21 +2363,33 @@ function bindSettingsInteractiveEvents() {
       userSettings.themeId = "custom";
 
       if (varName === "--bg-card") {
-        document.documentElement.style.setProperty("--bg-card-hover", val);
+        const hoverHex = computeHoverColor(val);
+        userSettings.customColors["--bg-card-hover"] = hoverHex;
+        document.documentElement.style.setProperty("--bg-card-hover", hoverHex);
       }
 
-      // Sync legacy aliases
       if (varName === "--bg-primary") document.documentElement.style.setProperty("--bg-base", val);
       if (varName === "--bg-secondary") document.documentElement.style.setProperty("--bg-surface", val);
       if (varName === "--text-primary") document.documentElement.style.setProperty("--text-main", val);
-      if (varName === "--accent-blue") document.documentElement.style.setProperty("--primary", val);
-      if (varName === "--accent-purple") document.documentElement.style.setProperty("--accent", val);
+      if (varName === "--accent-blue") {
+        document.documentElement.style.setProperty("--primary", val);
+        document.documentElement.style.setProperty("--primary-hover", val);
+        document.documentElement.style.setProperty("--on-primary", getContrastTextColor(val));
+      }
+      if (varName === "--accent-purple") {
+        document.documentElement.style.setProperty("--accent", val);
+        document.documentElement.style.setProperty("--accent-hover", val);
+        document.documentElement.style.setProperty("--on-accent", getContrastTextColor(val));
+      }
 
-      saveSettingsToStorage();
       const presetsGrid = document.getElementById("theme-presets-grid");
       if (presetsGrid) {
         presetsGrid.querySelectorAll(".theme-preset-card").forEach((c) => c.classList.remove("active"));
       }
+    });
+
+    input.addEventListener("change", () => {
+      saveSettingsToStorage(false);
     });
   });
 
@@ -2379,15 +2410,16 @@ function bindSettingsInteractiveEvents() {
         const input = document.getElementById(inputId);
         if (input) colors[varName] = input.value;
       });
-
-      colors["--bg-card-hover"] = colors["--bg-card"];
+      if (colors["--bg-card"]) {
+        colors["--bg-card-hover"] = computeHoverColor(colors["--bg-card"]);
+      }
 
       userSettings.savedCustomThemes[name] = colors;
       userSettings.themeId = name;
       userSettings.customColors = null;
       nameInput.value = "";
 
-      saveSettingsToStorage();
+      saveSettingsToStorage(false);
       syncSettingsUI();
       renderSavedCustomThemes();
       showToast(`Custom theme "${name}" saved!`);
@@ -2411,7 +2443,7 @@ function bindSettingsInteractiveEvents() {
       localStorage.removeItem("dashboard_dismissed_update_version");
       applyAllActiveSettings();
       syncSettingsUI();
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
       if (userSettings.checkForUpdates) {
         checkAppUpdatesAsync();
       }
@@ -2423,33 +2455,10 @@ function bindSettingsInteractiveEvents() {
   const btnDismissBanner = document.getElementById("btn-dismiss-update-banner");
   if (btnDismissBanner) {
     btnDismissBanner.addEventListener("click", () => {
-      // 1. Hide the banner in settings
-      const banner = document.getElementById("settings-update-banner");
-      if (banner) banner.style.display = "none";
-
-      // 2. Clear both notifications: banner AND Settings navigation badge
-      const navBadge = document.getElementById("nav-update-badge");
-      if (navBadge) {
-        navBadge.classList.add("hidden");
-        navBadge.style.display = "none";
-      }
-      const btnSettings = document.getElementById("btn-settings");
-      if (btnSettings) {
-        btnSettings.title = "Application Settings";
-      }
-      const ghLink = document.getElementById("nav-github-link");
-      if (ghLink) {
-        ghLink.classList.remove("has-update");
-      }
-      const statusBadge = document.getElementById("update-status-badge");
-      if (statusBadge) {
-        statusBadge.style.display = "none";
-      }
-
-      // 3. Persist dismissed state for this release version
       if (appUpdateData && appUpdateData.latest_version) {
         localStorage.setItem("dashboard_dismissed_update_version", appUpdateData.latest_version);
       }
+      clearUpdateIndicator();
       showToast("Update notifications cleared");
     });
   }
@@ -2457,12 +2466,10 @@ function bindSettingsInteractiveEvents() {
   // Settings Update Banner Apply (Self-Update)
   const btnApplyUpdate = document.getElementById("btn-apply-update");
   if (btnApplyUpdate) {
-    btnApplyUpdate.addEventListener("click", () => {
-      executeSelfUpdate();
-    });
+    btnApplyUpdate.addEventListener("click", executeSelfUpdate);
   }
 
-  // Navigation Links & Updates
+  // Navigation Links & Updates (persisted on backend)
   const toggleGitHub = document.getElementById("toggle-github-btn");
   const toggleUpdates = document.getElementById("toggle-check-updates");
 
@@ -2470,14 +2477,14 @@ function bindSettingsInteractiveEvents() {
     toggleGitHub.addEventListener("change", (e) => {
       userSettings.showGitHubBtn = e.target.checked;
       applyGitHubNav();
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
     });
   }
 
   if (toggleUpdates) {
     toggleUpdates.addEventListener("change", (e) => {
       userSettings.checkForUpdates = e.target.checked;
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
       if (e.target.checked) {
         checkAppUpdatesAsync(true);
       } else {
@@ -2501,16 +2508,11 @@ function bindSettingsInteractiveEvents() {
         appIndexUrlConfig.style.display = e.target.checked ? "flex" : "none";
       }
       if (sameTabWrapper) {
-        if (e.target.checked) {
-          sameTabWrapper.classList.remove("toggle-disabled");
-          if (toggleSameTab) toggleSameTab.disabled = false;
-        } else {
-          sameTabWrapper.classList.add("toggle-disabled");
-          if (toggleSameTab) toggleSameTab.disabled = true;
-        }
+        sameTabWrapper.classList.toggle("toggle-disabled", !e.target.checked);
+        if (toggleSameTab) toggleSameTab.disabled = !e.target.checked;
       }
       applyAppIndexNav();
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
     });
   }
 
@@ -2518,20 +2520,25 @@ function bindSettingsInteractiveEvents() {
     toggleSameTab.addEventListener("change", (e) => {
       userSettings.openAppIndexInSameTab = e.target.checked;
       applyAppIndexNav();
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
     });
   }
 
   if (appIndexUrlInput) {
     const handleUrlChange = () => {
-      let val = appIndexUrlInput.value.trim();
-      if (!val) {
-        val = "http://localhost:8765";
-        appIndexUrlInput.value = val;
+      const rawVal = appIndexUrlInput.value.trim();
+      const safeUrl = sanitizeHttpUrl(rawVal);
+      if (rawVal && safeUrl !== rawVal) {
+        showToast("AppIndex URL must use http:// or https://", "error");
       }
-      userSettings.appIndexUrl = val;
-      applyAppIndexNav();
-      saveSettingsToStorage();
+      if (appIndexUrlInput.value !== safeUrl) {
+        appIndexUrlInput.value = safeUrl;
+      }
+      if (userSettings.appIndexUrl !== safeUrl) {
+        userSettings.appIndexUrl = safeUrl;
+        applyAppIndexNav();
+        saveSettingsToStorage(true);
+      }
     };
     appIndexUrlInput.addEventListener("change", handleUrlChange);
     appIndexUrlInput.addEventListener("blur", handleUrlChange);
@@ -2542,7 +2549,7 @@ function bindSettingsInteractiveEvents() {
       appIndexUrlInput.value = "http://localhost:8765";
       userSettings.appIndexUrl = "http://localhost:8765";
       applyAppIndexNav();
-      saveSettingsToStorage();
+      saveSettingsToStorage(true);
       showToast("Reset AppIndex URL to default");
     });
   }
@@ -2596,16 +2603,14 @@ function openSettingsModal() {
 
 function closeSettingsModal() {
   const modal = document.getElementById("settings-modal");
-  if (modal) {
+  if (modal && modal.classList.contains("open")) {
     document.querySelectorAll(".help-popover").forEach((p) => (p.style.display = "none"));
     document.querySelectorAll(".help-circle-btn").forEach((b) => b.classList.remove("active"));
 
-    saveSettingsToStorage();
+    saveLocalSettings();
     applyAllActiveSettings();
 
     modal.classList.remove("open");
     modal.style.display = "none";
   }
 }
-
-

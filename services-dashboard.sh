@@ -5,13 +5,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_ENTRY="${SCRIPT_DIR}/app.py"
 PORT="${SERVICES_DASHBOARD_PORT:-5100}"
-URL="http://localhost:${PORT}"
+HOST="${SERVICES_DASHBOARD_HOST:-127.0.0.1}"
+CHECK_HOST="${HOST}"
+if [ "${CHECK_HOST}" = "0.0.0.0" ] || [ "${CHECK_HOST}" = "::" ]; then
+    CHECK_HOST="localhost"
+fi
+URL="http://${CHECK_HOST}:${PORT}"
 ACTION="${1:-launch}"
 SERVICE_NAME="services-dashboard.service"
 
 is_running() {
-    curl -s --connect-timeout 1 "${URL}/api/status" >/dev/null 2>&1
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --connect-timeout 1 "${URL}/api/status" >/dev/null 2>&1
+    else
+        python3 -c "import urllib.request; urllib.request.urlopen('${URL}/api/status', timeout=1)" >/dev/null 2>&1
+    fi
 }
 
 wait_for_server() {
@@ -23,6 +33,19 @@ wait_for_server() {
         if [ "$count" -ge $((timeout * 2)) ]; then
             echo "Error: Timed out waiting for Services Dashboard to start." >&2
             return 1
+        fi
+    done
+}
+
+stop_standalone() {
+    pkill -f "${APP_ENTRY}" 2>/dev/null || true
+    local count=0
+    while pgrep -f "${APP_ENTRY}" >/dev/null 2>&1; do
+        sleep 0.25
+        count=$((count + 1))
+        if [ "$count" -ge 20 ]; then
+            pkill -KILL -f "${APP_ENTRY}" 2>/dev/null || true
+            break
         fi
     done
 }
@@ -41,8 +64,12 @@ ensure_server() {
         fi
     fi
 
-    echo "Starting Services Dashboard in background on port ${PORT}..."
-    nohup python3 "${SCRIPT_DIR}/app.py" >/dev/null 2>&1 &
+    echo "Starting Services Dashboard in background on ${URL}..."
+    (
+        cd "${SCRIPT_DIR}"
+        SERVICES_DASHBOARD_HOST="${HOST}" SERVICES_DASHBOARD_PORT="${PORT}" \
+            nohup python3 "${APP_ENTRY}" >/dev/null 2>&1 &
+    )
     wait_for_server
 }
 
@@ -71,7 +98,7 @@ case "${ACTION}" in
             systemctl --user stop "${SERVICE_NAME}"
         else
             echo "Stopping standalone instances..."
-            pkill -f "app.py" 2>/dev/null || true
+            stop_standalone
         fi
         echo "Services Dashboard stopped."
         ;;
@@ -79,10 +106,10 @@ case "${ACTION}" in
         if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
             echo "Restarting ${SERVICE_NAME}..."
             systemctl --user restart "${SERVICE_NAME}"
+            wait_for_server
         else
             echo "Restarting Services Dashboard..."
-            pkill -f "app.py" 2>/dev/null || true
-            sleep 1
+            stop_standalone
             ensure_server
         fi
         echo "Services Dashboard restarted at ${URL}"
